@@ -10,7 +10,8 @@ import sys
 
 from telethon import TelegramClient
 
-from sniper.config import Config
+from sniper.config import DEFAULT_API_HASH, DEFAULT_API_ID, Config
+from sniper.list_gifts import list_gifts
 from sniper.poller import get_stats, run_loop
 
 logger = logging.getLogger("sniper")
@@ -19,6 +20,23 @@ logger = logging.getLogger("sniper")
 def _setup_logging(level: str) -> None:
     fmt = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
     logging.basicConfig(level=getattr(logging, level, logging.INFO), format=fmt)
+
+
+async def _list_gifts() -> None:
+    """Connect and list all available gifts, then exit."""
+    import os
+
+    from dotenv import load_dotenv
+
+    load_dotenv()
+    api_id = int(os.getenv("API_ID", str(DEFAULT_API_ID)))
+    api_hash = os.getenv("API_HASH", DEFAULT_API_HASH)
+    session = os.getenv("SESSION_NAME", "sniper")
+
+    client = TelegramClient(session, api_id, api_hash)
+    await client.start()
+    await list_gifts(client)
+    await client.disconnect()
 
 
 async def _run(cfg: Config) -> None:
@@ -63,7 +81,17 @@ def main() -> None:
         default="config.yaml",
         help="Path to config file (default: config.yaml)",
     )
+    parser.add_argument(
+        "--list-gifts",
+        action="store_true",
+        help="List all available gift collections with IDs, then exit",
+    )
     args = parser.parse_args()
+
+    if args.list_gifts:
+        _setup_logging("INFO")
+        asyncio.run(_list_gifts())
+        return
 
     cfg = Config.load(args.config)
     _setup_logging(cfg.log_level)

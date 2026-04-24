@@ -8,7 +8,7 @@ import time
 from typing import TYPE_CHECKING
 
 from telethon import functions, types
-from telethon.errors import FloodWaitError
+from telethon.errors import BadRequestError, FloodWaitError
 
 from sniper.buyer import buy_gift
 from sniper.config import Config, TargetGift
@@ -70,6 +70,17 @@ async def poll_target(
             target.name,
         )
         await asyncio.sleep(e.seconds + 1)
+        return
+    except BadRequestError as e:
+        if "STARGIFT_INVALID" in str(e):
+            logger.error(
+                "Invalid gift_id=%d (%s) — run 'python -m sniper --list-gifts' "
+                "to see valid IDs. Skipping this target.",
+                target.gift_id,
+                target.name,
+            )
+        else:
+            logger.exception("Bad request polling gift_id=%d (%s)", target.gift_id, target.name)
         return
     except Exception:
         logger.exception("Error polling gift_id=%d (%s)", target.gift_id, target.name)
