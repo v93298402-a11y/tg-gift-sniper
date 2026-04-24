@@ -19,26 +19,32 @@ async def buy_gift(
     price: int,
     gift_title: str,
     dry_run: bool = True,
+    pay_with_ton: bool = False,
 ) -> bool:
     """Attempt to purchase a resale gift.
 
     Returns True on success, False on failure.
     """
+    currency = "TON" if pay_with_ton else "Stars"
     me = await client.get_me()
     to_peer = types.InputPeerUser(user_id=me.id, access_hash=me.access_hash)
     invoice = types.InputInvoiceStarGiftResale(slug=slug, to_id=to_peer)
 
     if dry_run:
         logger.info(
-            "[DRY-RUN] Would buy '%s' (slug=%s) for %d Stars",
+            "[DRY-RUN] Would buy '%s' (slug=%s) for %d %s",
             gift_title,
             slug,
             price,
+            currency,
         )
         return True
 
     try:
-        form = await client(functions.payments.GetPaymentFormRequest(invoice=invoice))
+        form_req = functions.payments.GetPaymentFormRequest(invoice=invoice)
+        if pay_with_ton:
+            form_req = functions.payments.GetPaymentFormRequest(invoice=invoice, ton=True)
+        form = await client(form_req)
         form_id = form.form_id
         logger.debug("Got payment form: form_id=%d", form_id)
 
@@ -48,10 +54,11 @@ async def buy_gift(
 
         if isinstance(result, types.payments.PaymentResult):
             logger.info(
-                "Bought '%s' (slug=%s) for %d Stars",
+                "Bought '%s' (slug=%s) for %d %s",
                 gift_title,
                 slug,
                 price,
+                currency,
             )
             return True
 

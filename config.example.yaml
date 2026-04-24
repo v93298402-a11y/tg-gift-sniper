@@ -15,17 +15,20 @@ dry_run: true
 max_spend_per_buy: 5000
 
 # Targets — list of gift collections to monitor.
-# gift_id: the base gift ID (from payments.getStarGifts)
-# max_price: buy if resale price <= this value (in Stars)
+# gift_id: the base gift ID (run: python -m sniper --list-gifts to see IDs)
+# max_price: buy if resale price <= this value (in Stars or TON nanos)
 # name: human-readable label for logs
+# pay_with_ton: false (default, pay with Stars) or true (pay with TON)
 targets:
   - gift_id: 6202085688049584129
     max_price: 500
     name: "Plush Pepe"
+    pay_with_ton: false
 
   # - gift_id: 1234567890123456789
   #   max_price: 1000
   #   name: "Another Gift"
+  #   pay_with_ton: true  # pay with TON instead of Stars
 
 # Notification settings (optional).
 # notify_chat_id: Telegram chat/user ID where purchase alerts are sent.

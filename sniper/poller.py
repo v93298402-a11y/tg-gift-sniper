@@ -145,6 +145,7 @@ async def poll_target(
             price=price,
             gift_title=f"{target.name} #{gift.num}",
             dry_run=cfg.dry_run,
+            pay_with_ton=target.pay_with_ton,
         )
         if ok:
             _stats["buys_ok"] += 1
