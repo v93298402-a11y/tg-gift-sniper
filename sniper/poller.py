@@ -14,6 +14,8 @@ from telethon.errors import BadRequestError, FloodWaitError
 from sniper.buyer import buy_gift
 from sniper.config import Config, TargetGift
 
+CONNECTION_ERRORS = (ConnectionError, OSError)
+
 if TYPE_CHECKING:
     from telethon import TelegramClient
 
@@ -102,6 +104,13 @@ async def _poll_gift_id(
             )
         else:
             logger.exception("Bad request polling gift_id=%d", gift_id)
+        return
+    except CONNECTION_ERRORS:
+        logger.warning("Connection lost, reconnecting…")
+        try:
+            await client.connect()
+        except Exception:
+            logger.exception("Reconnect failed")
         return
     except Exception:
         logger.exception("Error polling gift_id=%d", gift_id)
