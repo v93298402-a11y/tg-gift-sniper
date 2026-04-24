@@ -1,0 +1,36 @@
+# ───────────────────────────────────────────────
+# tg-gift-sniper — configuration
+# ───────────────────────────────────────────────
+
+# Polling interval in seconds.
+# Lower = faster reaction, but higher risk of FLOOD_WAIT.
+# Recommended: 2-5 for moderate speed, 1 for aggressive.
+poll_interval: 3
+
+# Dry-run mode: if true, the bot logs what it *would* buy but does not purchase.
+dry_run: true
+
+# Maximum Stars balance you're willing to spend per single purchase.
+# If a gift costs more than this, it will be skipped even if it's below floor.
+max_spend_per_buy: 5000
+
+# Targets — list of gift collections to monitor.
+# gift_id: the base gift ID (from payments.getStarGifts)
+# max_price: buy if resale price <= this value (in Stars)
+# name: human-readable label for logs
+targets:
+  - gift_id: 6202085688049584129
+    max_price: 500
+    name: "Plush Pepe"
+
+  # - gift_id: 1234567890123456789
+  #   max_price: 1000
+  #   name: "Another Gift"
+
+# Notification settings (optional).
+# notify_chat_id: Telegram chat/user ID where purchase alerts are sent.
+# Leave empty or remove to disable notifications.
+notify_chat_id: null
+
+# Logging level: DEBUG, INFO, WARNING, ERROR
+log_level: INFO
