@@ -13,8 +13,8 @@
 
 - Python 3.10+
 - Отдельный Telegram-аккаунт (настоятельно рекомендуется, **не** основной)
-- `api_id` и `api_hash` с [my.telegram.org](https://my.telegram.org)
 - Баланс Stars на аккаунте
+- *(Опционально)* `api_id` и `api_hash` с [my.telegram.org](https://my.telegram.org) — если не указать, используются публичные ключи Telegram Desktop
 
 ## Быстрый старт
 
@@ -32,8 +32,9 @@ pip install -e .
 
 ```bash
 cp .env.example .env
-# Вписать свои api_id и api_hash
 ```
+
+API-ключи вписывать **не обязательно** — по умолчанию используются публичные ключи Telegram Desktop. Если хотите свои — раскомментируйте `API_ID` и `API_HASH` в `.env`.
 
 ### 3. Настроить `config.yaml`
 
@@ -109,11 +110,11 @@ tg-gift-sniper/
 ```bash
 # На VPS (Ubuntu)
 sudo apt update && sudo apt install -y python3.12 python3.12-venv
-git clone <repo> && cd tg-gift-sniper
+git clone https://github.com/v93298402-a11y/tg-gift-sniper.git && cd tg-gift-sniper
 python3.12 -m venv .venv && source .venv/bin/activate
 pip install -e .
 cp .env.example .env && cp config.example.yaml config.yaml
-# Заполнить .env и config.yaml
+# Отредактировать config.yaml (gift_id, max_price)
 python -m sniper  # Первый раз — авторизация
 ```
 

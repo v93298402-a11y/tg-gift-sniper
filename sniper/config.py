@@ -13,6 +13,11 @@ from dotenv import load_dotenv
 
 logger = logging.getLogger(__name__)
 
+# Telegram Desktop (open-source) credentials — safe to use, no registration needed.
+# Can be overridden via .env if you have your own api_id/api_hash.
+DEFAULT_API_ID = 2040
+DEFAULT_API_HASH = "b18441a1ff607e10a989891a5462e627"
+
 
 @dataclass
 class TargetGift:
@@ -41,8 +46,9 @@ class Config:
         api_id_raw = os.getenv("API_ID")
         api_hash = os.getenv("API_HASH")
         if not api_id_raw or not api_hash:
-            logger.error("API_ID and API_HASH must be set in .env")
-            sys.exit(1)
+            logger.info("API_ID/API_HASH not set in .env, using Telegram Desktop defaults")
+            api_id_raw = str(DEFAULT_API_ID)
+            api_hash = DEFAULT_API_HASH
 
         session_name = os.getenv("SESSION_NAME", "sniper")
 
