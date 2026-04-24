@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from collections import defaultdict
 from typing import TYPE_CHECKING
 
 from telethon import functions, types
@@ -46,101 +47,70 @@ def _extract_price(gift: types.StarGiftUnique) -> int | None:
     return None
 
 
-# Cache: gift_id -> {model_name: attr, ...}
-_attr_cache: dict[int, dict[str, types.TypeStarGiftAttribute]] = {}
-
-
-async def _resolve_attributes(
-    client: TelegramClient,
-    target: TargetGift,
-) -> list[types.TypeStarGiftAttribute] | None:
-    """Build attribute filter list for a target, if model/pattern/backdrop set."""
+def _gift_matches_filter(gift: types.StarGiftUnique, target: TargetGift) -> bool:
+    """Check if a gift's attributes match the target's model/pattern/backdrop filter."""
     if not (target.model or target.pattern or target.backdrop):
-        return None
+        return True
 
-    if target.gift_id not in _attr_cache:
-        result = await client(
-            functions.payments.GetResaleStarGiftsRequest(
-                gift_id=target.gift_id,
-                sort_by_price=True,
-                offset="",
-                limit=1,
-                attributes_hash=0,
-            )
-        )
-        cache: dict[str, types.TypeStarGiftAttribute] = {}
-        if hasattr(result, "attributes") and result.attributes:
-            for attr in result.attributes:
-                if hasattr(attr, "name"):
-                    key = attr.name.lower()
-                    cache[key] = attr
-        _attr_cache[target.gift_id] = cache
+    for attr in gift.attributes:
+        if target.model and isinstance(attr, types.StarGiftAttributeModel):
+            if attr.name.lower() == target.model.lower():
+                return True
+        if target.pattern and isinstance(attr, types.StarGiftAttributePattern):
+            if attr.name.lower() == target.pattern.lower():
+                return True
+        if target.backdrop and isinstance(attr, types.StarGiftAttributeBackdrop):
+            if attr.name.lower() == target.backdrop.lower():
+                return True
 
-    cache = _attr_cache[target.gift_id]
-    attrs: list[types.TypeStarGiftAttribute] = []
-
-    for name in (target.model, target.pattern, target.backdrop):
-        if name and name.lower() in cache:
-            attrs.append(cache[name.lower()])
-        elif name:
-            logger.warning(
-                "Attribute '%s' not found for gift_id=%d (%s). "
-                "Run: python -m sniper --list-models %d",
-                name,
-                target.gift_id,
-                target.name,
-                target.gift_id,
-            )
-
-    return attrs or None
+    return False
 
 
-async def poll_target(
+async def _poll_gift_id(
     client: TelegramClient,
-    target: TargetGift,
+    gift_id: int,
+    targets: list[TargetGift],
     cfg: Config,
 ) -> None:
-    """Single poll cycle for one target gift_id."""
+    """Single poll cycle for one gift_id, checked against multiple targets."""
     try:
-        attrs = await _resolve_attributes(client, target)
-        req_kwargs: dict = {
-            "gift_id": target.gift_id,
-            "sort_by_price": True,
-            "offset": "",
-            "limit": 20,
-        }
-        if attrs:
-            req_kwargs["attributes"] = attrs
-        result = await client(functions.payments.GetResaleStarGiftsRequest(**req_kwargs))
+        result = await client(
+            functions.payments.GetResaleStarGiftsRequest(
+                gift_id=gift_id,
+                sort_by_price=True,
+                offset="",
+                limit=20,
+            )
+        )
     except FloodWaitError as e:
         _stats["flood_waits"] += 1
         logger.warning(
-            "FLOOD_WAIT %ds on gift_id=%d (%s), sleeping…",
+            "FLOOD_WAIT %ds on gift_id=%d, sleeping…",
             e.seconds,
-            target.gift_id,
-            target.name,
+            gift_id,
         )
         await asyncio.sleep(e.seconds + 1)
         return
     except BadRequestError as e:
         if "STARGIFT_INVALID" in str(e):
+            names = ", ".join(t.name for t in targets)
             logger.error(
                 "Invalid gift_id=%d (%s) — run 'python -m sniper --list-gifts' "
-                "to see valid IDs. Skipping this target.",
-                target.gift_id,
-                target.name,
+                "to see valid IDs. Skipping.",
+                gift_id,
+                names,
             )
         else:
-            logger.exception("Bad request polling gift_id=%d (%s)", target.gift_id, target.name)
+            logger.exception("Bad request polling gift_id=%d", gift_id)
         return
     except Exception:
-        logger.exception("Error polling gift_id=%d (%s)", target.gift_id, target.name)
+        logger.exception("Error polling gift_id=%d", gift_id)
         return
 
     _stats["polls"] += 1
 
     if not hasattr(result, "gifts") or not result.gifts:
-        logger.debug("No resale listings for %s", target.name)
+        logger.debug("No resale listings for gift_id=%d", gift_id)
         return
 
     for gift in result.gifts:
@@ -158,52 +128,43 @@ async def poll_target(
         if slug in _seen_slugs:
             continue
 
-        if price > target.max_price:
-            logger.debug(
-                "%s #%d: %d Stars > max %d, skip",
+        if price > cfg.max_spend_per_buy:
+            continue
+
+        for target in targets:
+            if price > target.max_price:
+                continue
+
+            if not _gift_matches_filter(gift, target):
+                continue
+
+            logger.info(
+                "HIT: %s #%d — %d Stars (max %d) slug=%s",
                 target.name,
                 gift.num,
                 price,
                 target.max_price,
+                slug,
             )
-            continue
 
-        if price > cfg.max_spend_per_buy:
-            logger.debug(
-                "%s #%d: %d Stars > global max %d, skip",
-                target.name,
-                gift.num,
-                price,
-                cfg.max_spend_per_buy,
+            _seen_slugs.add(slug)
+            _stats["buys_attempted"] += 1
+
+            ok = await buy_gift(
+                client,
+                slug=slug,
+                price=price,
+                gift_title=f"{target.name} #{gift.num}",
+                dry_run=cfg.dry_run,
+                pay_with_ton=target.pay_with_ton,
             )
-            continue
-
-        logger.info(
-            "HIT: %s #%d — %d Stars (max %d) slug=%s",
-            target.name,
-            gift.num,
-            price,
-            target.max_price,
-            slug,
-        )
-
-        _seen_slugs.add(slug)
-        _stats["buys_attempted"] += 1
-
-        ok = await buy_gift(
-            client,
-            slug=slug,
-            price=price,
-            gift_title=f"{target.name} #{gift.num}",
-            dry_run=cfg.dry_run,
-            pay_with_ton=target.pay_with_ton,
-        )
-        if ok:
-            _stats["buys_ok"] += 1
-            if cfg.notify_chat_id:
-                await _send_notification(client, cfg.notify_chat_id, target, gift, price)
-        else:
-            _stats["buys_fail"] += 1
+            if ok:
+                _stats["buys_ok"] += 1
+                if cfg.notify_chat_id:
+                    await _send_notification(client, cfg.notify_chat_id, target, gift, price)
+            else:
+                _stats["buys_fail"] += 1
+            break  # gift matched a target, move to next gift
 
 
 async def _send_notification(
@@ -213,10 +174,11 @@ async def _send_notification(
     gift: types.StarGiftUnique,
     price: int,
 ) -> None:
+    currency = "TON" if target.pay_with_ton else "Stars"
     try:
         await client.send_message(
             chat_id,
-            f"Bought **{target.name} #{gift.num}** for {price} Stars\nSlug: `{gift.slug}`",
+            f"Bought **{target.name} #{gift.num}** for {price} {currency}\nSlug: `{gift.slug}`",
             parse_mode="md",
         )
     except Exception:
@@ -236,8 +198,13 @@ async def run_loop(client: TelegramClient, cfg: Config) -> None:
     while True:
         t0 = time.monotonic()
 
+        # Group targets by gift_id → one API call per collection
+        by_gift: dict[int, list[TargetGift]] = defaultdict(list)
         for target in cfg.targets:
-            await poll_target(client, target, cfg)
+            by_gift[target.gift_id].append(target)
+
+        for gift_id, targets in by_gift.items():
+            await _poll_gift_id(client, gift_id, targets, cfg)
 
         elapsed = time.monotonic() - t0
         sleep_for = max(0.1, cfg.poll_interval - elapsed)
