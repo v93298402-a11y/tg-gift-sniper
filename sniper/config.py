@@ -79,8 +79,7 @@ class Config:
             )
 
         if not targets:
-            logger.error("No targets defined in config")
-            sys.exit(1)
+            logger.warning("No targets defined in config — add via bot or config.yaml")
 
         notify_raw = raw.get("notify_chat_id")
         notify_chat_id = int(notify_raw) if notify_raw else None

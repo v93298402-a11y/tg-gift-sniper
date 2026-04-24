@@ -185,7 +185,27 @@ async def _send_notification(
         logger.exception("Failed to send notification")
 
 
-async def run_loop(client: TelegramClient, cfg: Config) -> None:
+def _bot_targets_to_config(bot_targets: list[dict]) -> list[TargetGift]:
+    """Convert bot-managed target dicts into TargetGift objects."""
+    return [
+        TargetGift(
+            gift_id=int(t["gift_id"]),
+            max_price=int(t["max_price"]),
+            name=str(t["name"]),
+            pay_with_ton=bool(t.get("pay_with_ton", False)),
+            model=t.get("model"),
+            pattern=t.get("pattern"),
+            backdrop=t.get("backdrop"),
+        )
+        for t in bot_targets
+    ]
+
+
+async def run_loop(
+    client: TelegramClient,
+    cfg: Config,
+    use_bot_targets: bool = False,
+) -> None:
     """Main polling loop — runs until cancelled."""
     reload_counter = 0
     logger.info(
@@ -198,9 +218,18 @@ async def run_loop(client: TelegramClient, cfg: Config) -> None:
     while True:
         t0 = time.monotonic()
 
+        # Merge config targets with bot-managed targets
+        all_targets = list(cfg.targets)
+        if use_bot_targets:
+            from sniper.bot import get_active_targets, is_dry_run
+
+            bot_targets = _bot_targets_to_config(get_active_targets())
+            all_targets.extend(bot_targets)
+            cfg.dry_run = is_dry_run()
+
         # Group targets by gift_id → one API call per collection
         by_gift: dict[int, list[TargetGift]] = defaultdict(list)
-        for target in cfg.targets:
+        for target in all_targets:
             by_gift[target.gift_id].append(target)
 
         for gift_id, targets in by_gift.items():

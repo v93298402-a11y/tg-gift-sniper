@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+import os
 import signal
 import sys
 
@@ -23,8 +24,6 @@ def _setup_logging(level: str) -> None:
 
 
 def _make_client() -> TelegramClient:
-    import os
-
     from dotenv import load_dotenv
 
     load_dotenv()
@@ -50,7 +49,7 @@ async def _list_models(gift_id: int) -> None:
     await client.disconnect()
 
 
-async def _run(cfg: Config) -> None:
+async def _run(cfg: Config, bot_mode: bool = False) -> None:
     client = TelegramClient(cfg.session_name, cfg.api_id, cfg.api_hash)
 
     logger.info("Connecting to Telegram…")
@@ -61,6 +60,24 @@ async def _run(cfg: Config) -> None:
 
     if cfg.dry_run:
         logger.warning("DRY-RUN mode is ON — no real purchases will be made")
+
+    if bot_mode:
+        from sniper.bot import build_application, set_telethon_client
+
+        bot_token = os.getenv("BOT_TOKEN", "")
+        if not bot_token:
+            logger.error("BOT_TOKEN not set in .env — cannot start bot interface")
+            await client.disconnect()
+            sys.exit(1)
+
+        set_telethon_client(client)
+        app = build_application(bot_token, owner_id=me.id)
+
+        logger.info("Starting bot interface…")
+        await app.initialize()
+        await app.start()
+        await app.updater.start_polling()
+        logger.info("Bot interface started. Send /start to your bot.")
 
     loop = asyncio.get_event_loop()
 
@@ -73,10 +90,17 @@ async def _run(cfg: Config) -> None:
         loop.add_signal_handler(sig, _shutdown)
 
     try:
-        await run_loop(client, cfg)
+        await run_loop(client, cfg, use_bot_targets=bot_mode)
     except asyncio.CancelledError:
         pass
     finally:
+        if bot_mode:
+            try:
+                await app.updater.stop()
+                await app.stop()
+                await app.shutdown()
+            except Exception:
+                pass
         await client.disconnect()
         logger.info("Disconnected. Final stats: %s", get_stats())
 
@@ -103,6 +127,11 @@ def main() -> None:
         metavar="GIFT_ID",
         help="List available models/patterns/backdrops for a gift collection, then exit",
     )
+    parser.add_argument(
+        "--bot",
+        action="store_true",
+        help="Start with Telegram bot interface for managing targets",
+    )
     args = parser.parse_args()
 
     if args.list_gifts:
@@ -121,7 +150,7 @@ def main() -> None:
     logger.info("Config loaded: %s", cfg)
 
     try:
-        asyncio.run(_run(cfg))
+        asyncio.run(_run(cfg, bot_mode=args.bot))
     except KeyboardInterrupt:
         logger.info("Interrupted. Final stats: %s", get_stats())
         sys.exit(0)
