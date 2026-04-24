@@ -219,13 +219,12 @@ async def cb_pick_collection(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     models = attrs.get("models", [])
     if models:
-        buttons = []
+        buttons = [
+            [InlineKeyboardButton("Пропустить (любая модель)", callback_data='{"a":"mod","n":""}')],
+        ]
         for m in models:
             cb_data = json.dumps({"a": "mod", "n": m["name"]})
             buttons.append([InlineKeyboardButton(m["name"], callback_data=cb_data)])
-        buttons.append(
-            [InlineKeyboardButton("Пропустить (любая модель)", callback_data='{"a":"mod","n":""}')]
-        )
         buttons.append([InlineKeyboardButton("« Назад", callback_data="back_col")])
         await query.edit_message_text(
             f"Коллекция: {title}\nВыбери модель:",
@@ -257,13 +256,12 @@ async def _ask_backdrop(query, context, attrs: dict) -> int:
     title = context.user_data["gift_title"]
 
     if backdrops:
-        buttons = []
+        buttons = [
+            [InlineKeyboardButton("Пропустить (любой фон)", callback_data='{"a":"bd","n":""}')],
+        ]
         for b in backdrops:
             cb_data = json.dumps({"a": "bd", "n": b["name"]})
             buttons.append([InlineKeyboardButton(b["name"], callback_data=cb_data)])
-        buttons.append(
-            [InlineKeyboardButton("Пропустить (любой фон)", callback_data='{"a":"bd","n":""}')]
-        )
         model_info = f"\nМодель: {context.user_data['model']}" if context.user_data["model"] else ""
         await query.edit_message_text(
             f"Коллекция: {title}{model_info}\nВыбери фон:",
@@ -292,13 +290,12 @@ async def _ask_pattern(query, context, attrs: dict) -> int:
     title = context.user_data["gift_title"]
 
     if patterns:
-        buttons = []
+        buttons = [
+            [InlineKeyboardButton("Пропустить (любой паттерн)", callback_data='{"a":"pt","n":""}')],
+        ]
         for p in patterns:
             cb_data = json.dumps({"a": "pt", "n": p["name"]})
             buttons.append([InlineKeyboardButton(p["name"], callback_data=cb_data)])
-        buttons.append(
-            [InlineKeyboardButton("Пропустить (любой паттерн)", callback_data='{"a":"pt","n":""}')]
-        )
         model_info = f"\nМодель: {context.user_data['model']}" if context.user_data["model"] else ""
         bd_info = f"\nФон: {context.user_data['backdrop']}" if context.user_data["backdrop"] else ""
         await query.edit_message_text(
