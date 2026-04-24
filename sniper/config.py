@@ -25,6 +25,9 @@ class TargetGift:
     max_price: int
     name: str
     pay_with_ton: bool = False
+    model: str | None = None
+    pattern: str | None = None
+    backdrop: str | None = None
 
 
 @dataclass
@@ -69,6 +72,9 @@ class Config:
                     max_price=int(entry["max_price"]),
                     name=str(entry.get("name", f"gift-{entry['gift_id']}")),
                     pay_with_ton=bool(entry.get("pay_with_ton", False)),
+                    model=entry.get("model"),
+                    pattern=entry.get("pattern"),
+                    backdrop=entry.get("backdrop"),
                 )
             )
 
@@ -105,6 +111,9 @@ class Config:
                         max_price=int(entry["max_price"]),
                         name=str(entry.get("name", f"gift-{entry['gift_id']}")),
                         pay_with_ton=bool(entry.get("pay_with_ton", False)),
+                        model=entry.get("model"),
+                        pattern=entry.get("pattern"),
+                        backdrop=entry.get("backdrop"),
                     )
                 )
             if new_targets:

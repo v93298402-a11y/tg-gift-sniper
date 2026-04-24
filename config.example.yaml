@@ -19,16 +19,21 @@ max_spend_per_buy: 5000
 # max_price: buy if resale price <= this value (in Stars or TON nanos)
 # name: human-readable label for logs
 # pay_with_ton: false (default, pay with Stars) or true (pay with TON)
+# model: filter by model name (run: python -m sniper --list-models GIFT_ID)
+# pattern: filter by pattern name (optional)
+# backdrop: filter by backdrop name (optional)
 targets:
   - gift_id: 6202085688049584129
     max_price: 500
     name: "Plush Pepe"
     pay_with_ton: false
 
-  # - gift_id: 1234567890123456789
-  #   max_price: 1000
-  #   name: "Another Gift"
-  #   pay_with_ton: true  # pay with TON instead of Stars
+  # Filter by specific model:
+  # - gift_id: 6014591077976114307
+  #   max_price: 200
+  #   name: "Snoop Dogg Goldizzle"
+  #   model: "Goldizzle"
+  #   pay_with_ton: true
 
 # Notification settings (optional).
 # notify_chat_id: Telegram chat/user ID where purchase alerts are sent.

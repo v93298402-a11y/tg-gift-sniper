@@ -1,4 +1,4 @@
-"""Utility to list all available gift collections with their IDs."""
+"""Utility to list available gift collections and their models/attributes."""
 
 from __future__ import annotations
 
@@ -50,4 +50,73 @@ async def list_gifts(client: TelegramClient) -> None:
     print()
     print("Use the ID values above as gift_id in config.yaml.")
     print("Only gifts with 'on resale' status can be sniped.")
+    print()
+
+
+async def list_models(client: TelegramClient, gift_id: int) -> None:
+    """Fetch and print available models/attributes for a specific gift collection."""
+    result = await client(
+        functions.payments.GetResaleStarGiftsRequest(
+            gift_id=gift_id,
+            sort_by_price=True,
+            offset="",
+            limit=1,
+            attributes_hash=0,
+        )
+    )
+
+    if not hasattr(result, "attributes") or not result.attributes:
+        print(f"\nNo attributes found for gift_id={gift_id}")
+        return
+
+    models = []
+    patterns = []
+    backdrops = []
+
+    for attr in result.attributes:
+        if isinstance(attr, types.StarGiftAttributeModel):
+            models.append(attr)
+        elif isinstance(attr, types.StarGiftAttributePattern):
+            patterns.append(attr)
+        elif isinstance(attr, types.StarGiftAttributeBackdrop):
+            backdrops.append(attr)
+
+    if models:
+        print(f"\n{'=' * 50}")
+        print(f"MODELS for gift_id={gift_id}")
+        print(f"{'=' * 50}")
+        for m in models:
+            rarity = ""
+            if m.rarity:
+                rarity_name = type(m.rarity).__name__.replace("StarGiftAttributeRarity", "")
+                rarity = f" [{rarity_name}]"
+            print(f"  {m.name}{rarity}")
+
+    if patterns:
+        print(f"\n{'=' * 50}")
+        print(f"PATTERNS for gift_id={gift_id}")
+        print(f"{'=' * 50}")
+        for p in patterns:
+            rarity = ""
+            if p.rarity:
+                rarity_name = type(p.rarity).__name__.replace("StarGiftAttributeRarity", "")
+                rarity = f" [{rarity_name}]"
+            print(f"  {p.name}{rarity}")
+
+    if backdrops:
+        print(f"\n{'=' * 50}")
+        print(f"BACKDROPS for gift_id={gift_id}")
+        print(f"{'=' * 50}")
+        for b in backdrops:
+            rarity = ""
+            if b.rarity:
+                rarity_name = type(b.rarity).__name__.replace("StarGiftAttributeRarity", "")
+                rarity = f" [{rarity_name}]"
+            print(f"  {b.name}{rarity}")
+
+    print()
+    print("Use these names in config.yaml, e.g.:")
+    print('  model: "Goldizzle"')
+    print('  pattern: "Stars"')
+    print('  backdrop: "Crimson"')
     print()

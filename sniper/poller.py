@@ -46,6 +46,55 @@ def _extract_price(gift: types.StarGiftUnique) -> int | None:
     return None
 
 
+# Cache: gift_id -> {model_name: attr, ...}
+_attr_cache: dict[int, dict[str, types.TypeStarGiftAttribute]] = {}
+
+
+async def _resolve_attributes(
+    client: TelegramClient,
+    target: TargetGift,
+) -> list[types.TypeStarGiftAttribute] | None:
+    """Build attribute filter list for a target, if model/pattern/backdrop set."""
+    if not (target.model or target.pattern or target.backdrop):
+        return None
+
+    if target.gift_id not in _attr_cache:
+        result = await client(
+            functions.payments.GetResaleStarGiftsRequest(
+                gift_id=target.gift_id,
+                sort_by_price=True,
+                offset="",
+                limit=1,
+                attributes_hash=0,
+            )
+        )
+        cache: dict[str, types.TypeStarGiftAttribute] = {}
+        if hasattr(result, "attributes") and result.attributes:
+            for attr in result.attributes:
+                if hasattr(attr, "name"):
+                    key = attr.name.lower()
+                    cache[key] = attr
+        _attr_cache[target.gift_id] = cache
+
+    cache = _attr_cache[target.gift_id]
+    attrs: list[types.TypeStarGiftAttribute] = []
+
+    for name in (target.model, target.pattern, target.backdrop):
+        if name and name.lower() in cache:
+            attrs.append(cache[name.lower()])
+        elif name:
+            logger.warning(
+                "Attribute '%s' not found for gift_id=%d (%s). "
+                "Run: python -m sniper --list-models %d",
+                name,
+                target.gift_id,
+                target.name,
+                target.gift_id,
+            )
+
+    return attrs or None
+
+
 async def poll_target(
     client: TelegramClient,
     target: TargetGift,
@@ -53,14 +102,16 @@ async def poll_target(
 ) -> None:
     """Single poll cycle for one target gift_id."""
     try:
-        result = await client(
-            functions.payments.GetResaleStarGiftsRequest(
-                gift_id=target.gift_id,
-                sort_by_price=True,
-                offset="",
-                limit=20,
-            )
-        )
+        attrs = await _resolve_attributes(client, target)
+        req_kwargs: dict = {
+            "gift_id": target.gift_id,
+            "sort_by_price": True,
+            "offset": "",
+            "limit": 20,
+        }
+        if attrs:
+            req_kwargs["attributes"] = attrs
+        result = await client(functions.payments.GetResaleStarGiftsRequest(**req_kwargs))
     except FloodWaitError as e:
         _stats["flood_waits"] += 1
         logger.warning(
