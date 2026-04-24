@@ -49,7 +49,7 @@ async def _list_models(gift_id: int) -> None:
     await client.disconnect()
 
 
-async def _run(cfg: Config, bot_mode: bool = False) -> None:
+async def _run(cfg: Config, bot_mode: bool = False, self_mode: bool = False) -> None:
     client = TelegramClient(cfg.session_name, cfg.api_id, cfg.api_hash)
 
     logger.info("Connecting to Telegram…")
@@ -60,6 +60,15 @@ async def _run(cfg: Config, bot_mode: bool = False) -> None:
 
     if cfg.dry_run:
         logger.warning("DRY-RUN mode is ON — no real purchases will be made")
+
+    use_dynamic_targets = False
+
+    if self_mode:
+        from sniper.selfbot import register_handlers
+
+        register_handlers(client)
+        use_dynamic_targets = True
+        logger.info("Saved Messages interface enabled. Send /menu to Saved Messages.")
 
     if bot_mode:
         from sniper.bot import build_application, set_telethon_client
@@ -73,6 +82,7 @@ async def _run(cfg: Config, bot_mode: bool = False) -> None:
         set_telethon_client(client)
         app = build_application(bot_token, owner_id=me.id)
 
+        use_dynamic_targets = True
         logger.info("Starting bot interface…")
         await app.initialize()
         await app.start()
@@ -90,7 +100,7 @@ async def _run(cfg: Config, bot_mode: bool = False) -> None:
         loop.add_signal_handler(sig, _shutdown)
 
     try:
-        await run_loop(client, cfg, use_bot_targets=bot_mode)
+        await run_loop(client, cfg, use_bot_targets=use_dynamic_targets, self_mode=self_mode)
     except asyncio.CancelledError:
         pass
     finally:
@@ -132,6 +142,12 @@ def main() -> None:
         action="store_true",
         help="Start with Telegram bot interface for managing targets",
     )
+    parser.add_argument(
+        "--self",
+        action="store_true",
+        dest="self_mode",
+        help="Manage targets via Saved Messages (no separate bot needed)",
+    )
     args = parser.parse_args()
 
     if args.list_gifts:
@@ -150,7 +166,7 @@ def main() -> None:
     logger.info("Config loaded: %s", cfg)
 
     try:
-        asyncio.run(_run(cfg, bot_mode=args.bot))
+        asyncio.run(_run(cfg, bot_mode=args.bot, self_mode=args.self_mode))
     except KeyboardInterrupt:
         logger.info("Interrupted. Final stats: %s", get_stats())
         sys.exit(0)

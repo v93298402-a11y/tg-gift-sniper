@@ -214,6 +214,7 @@ async def run_loop(
     client: TelegramClient,
     cfg: Config,
     use_bot_targets: bool = False,
+    self_mode: bool = False,
 ) -> None:
     """Main polling loop — runs until cancelled."""
     reload_counter = 0
@@ -227,9 +228,15 @@ async def run_loop(
     while True:
         t0 = time.monotonic()
 
-        # Merge config targets with bot-managed targets
+        # Merge config targets with dynamic targets
         all_targets = list(cfg.targets)
-        if use_bot_targets:
+        if self_mode:
+            from sniper.selfbot import get_active_targets as self_targets
+            from sniper.selfbot import is_dry_run as self_dry_run
+
+            all_targets.extend(_bot_targets_to_config(self_targets()))
+            cfg.dry_run = self_dry_run()
+        elif use_bot_targets:
             from sniper.bot import get_active_targets, is_dry_run
 
             bot_targets = _bot_targets_to_config(get_active_targets())
