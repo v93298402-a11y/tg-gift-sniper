@@ -11,6 +11,7 @@ import sys
 
 from telethon import TelegramClient
 
+from sniper.auth import get_mrkt_token, get_portals_token
 from sniper.config import DEFAULT_API_HASH, DEFAULT_API_ID, Config
 from sniper.list_gifts import list_gifts, list_models
 from sniper.markets import MarketTarget as MktTarget
@@ -109,6 +110,16 @@ async def _run(cfg: Config, bot_mode: bool = False, self_mode: bool = False) -> 
     if cfg.market_targets:
         mrkt_token = os.getenv("MRKT_TOKEN", "")
         portals_token = os.getenv("PORTALS_TOKEN", "")
+
+        needs_mrkt = any("mrkt" in t.markets for t in cfg.market_targets)
+        needs_portals = any("portals" in t.markets for t in cfg.market_targets)
+
+        if not mrkt_token and needs_mrkt:
+            logger.info("Auto-fetching MRKT auth token…")
+            mrkt_token = await get_mrkt_token(client)
+        if not portals_token and needs_portals:
+            logger.info("Auto-fetching Portals auth token…")
+            portals_token = await get_portals_token(client)
 
         mkt_targets = [
             MktTarget(
