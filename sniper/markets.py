@@ -15,8 +15,10 @@ logger = logging.getLogger(__name__)
 
 _TONNEL_URL = "https://gifts2.tonnel.network/api/pageGifts"
 _MRKT_URL = "https://api.tgmrkt.io/api/v1/gifts/saling"
+_MRKT_BUY_URL = "https://api.tgmrkt.io/api/v1/gifts/buy"
 _PORTALS_API = "https://portal-market.com/api"
 _PORTALS_SEARCH_URL = f"{_PORTALS_API}/nfts/search"
+_PORTALS_BUY_URL = f"{_PORTALS_API}/nfts"
 _PORTALS_COLLECTIONS_URL = f"{_PORTALS_API}/collections"
 
 _seen_market_ids: set[str] = set()
@@ -45,6 +47,7 @@ class MarketListing:
     gift_number: int | None = None
     listing_id: str = ""
     url: str = ""
+    raw_id: str = ""  # marketplace-native ID for buy API
 
 
 async def _poll_tonnel(
@@ -195,6 +198,7 @@ async def _poll_mrkt(
                 gift_number=gift_num,
                 listing_id=lid,
                 url=url,
+                raw_id=str(gift_id),
             )
         )
     return listings
@@ -267,7 +271,8 @@ async def _poll_portals(
         if price_f > target.max_price:
             continue
 
-        lid = f"portals_{g.get('id', '')}"
+        nft_id = g.get("id", "")
+        lid = f"portals_{nft_id}"
         attrs = g.get("attributes", [])
         model = None
         pattern = None
@@ -294,9 +299,76 @@ async def _poll_portals(
                 gift_number=g.get("external_collection_number"),
                 listing_id=lid,
                 url=url,
+                raw_id=str(nft_id),
             )
         )
     return listings
+
+
+async def _buy_mrkt(
+    client: httpx.AsyncClient,
+    listing: MarketListing,
+    auth_token: str,
+) -> bool:
+    """Attempt to buy a gift on MRKT."""
+    if not listing.raw_id:
+        logger.warning("MRKT buy: no raw_id for %s", listing.gift_name)
+        return False
+    headers = {"Authorization": auth_token, "Referer": "https://cdn.tgmrkt.io/"}
+    body = {"giftId": listing.raw_id}
+    try:
+        resp = await client.post(_MRKT_BUY_URL, json=body, headers=headers, timeout=15)
+        if resp.status_code in (200, 204):
+            logger.info(
+                "MRKT BUY OK: %s #%s — %.4f TON",
+                listing.gift_name,
+                listing.gift_number or "?",
+                listing.price,
+            )
+            return True
+        logger.warning("MRKT buy failed %d: %s", resp.status_code, resp.text[:200])
+    except Exception:
+        logger.exception("MRKT buy error for %s", listing.gift_name)
+    return False
+
+
+async def _buy_portals(
+    client: httpx.AsyncClient,
+    listing: MarketListing,
+    auth_token: str,
+) -> bool:
+    """Attempt to buy a gift on Portals."""
+    if not listing.raw_id:
+        logger.warning("Portals buy: no raw_id for %s", listing.gift_name)
+        return False
+    headers = {"Authorization": auth_token}
+    body = {"nft_details": [{"id": listing.raw_id, "price": str(listing.price)}]}
+    try:
+        resp = await client.post(_PORTALS_BUY_URL, json=body, headers=headers, timeout=15)
+        if resp.status_code in (200, 204):
+            logger.info(
+                "Portals BUY OK: %s #%s — %.4f TON",
+                listing.gift_name,
+                listing.gift_number or "?",
+                listing.price,
+            )
+            return True
+        logger.warning("Portals buy failed %d: %s", resp.status_code, resp.text[:200])
+    except Exception:
+        logger.exception("Portals buy error for %s", listing.gift_name)
+    return False
+
+
+_auto_buy_enabled = False
+
+
+def set_auto_buy(enabled: bool) -> None:
+    global _auto_buy_enabled
+    _auto_buy_enabled = enabled
+
+
+def is_auto_buy() -> bool:
+    return _auto_buy_enabled
 
 
 async def run_market_monitor(
@@ -393,6 +465,15 @@ async def run_market_monitor(
                         listing.currency,
                     )
 
+                    buy_result = ""
+                    if _auto_buy_enabled and listing.raw_id:
+                        ok = False
+                        if listing.marketplace == "MRKT" and mrkt_token:
+                            ok = await _buy_mrkt(client, listing, mrkt_token)
+                        elif listing.marketplace == "Portals" and portals_token:
+                            ok = await _buy_portals(client, listing, portals_token)
+                        buy_result = "\n✅ Куплено!" if ok else "\n❌ Покупка не удалась"
+
                     if notify_fn:
                         model_info = f"\nМодель: {listing.model}" if listing.model else ""
                         num = f" #{listing.gift_number}" if listing.gift_number else ""
@@ -404,6 +485,7 @@ async def run_market_monitor(
                             f"(макс {target.max_price})"
                             f"{model_info}"
                             f"{link}"
+                            f"{buy_result}"
                         )
                         try:
                             await notify_fn(msg)

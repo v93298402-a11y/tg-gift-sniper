@@ -19,6 +19,8 @@ from telegram.ext import (
 )
 from telethon import functions, types
 
+from sniper.markets import is_auto_buy, set_auto_buy
+
 if TYPE_CHECKING:
     from telethon import TelegramClient
 
@@ -138,17 +140,9 @@ async def _fetch_attributes(gift_id: int) -> dict[str, list[dict]]:
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not update.effective_user or not _check_owner(update.effective_user.id):
         return
-    kb = [
-        [InlineKeyboardButton("Добавить таргет", callback_data="add_target")],
-        [InlineKeyboardButton("Мои таргеты", callback_data="my_targets")],
-        [
-            InlineKeyboardButton(
-                f"Dry-run: {'ON' if _dry_run else 'OFF'}", callback_data="toggle_dry"
-            )
-        ],
-    ]
     await update.message.reply_text(
-        "Снайпер-бот. Выбери действие:", reply_markup=InlineKeyboardMarkup(kb)
+        "Снайпер-бот. Выбери действие:",
+        reply_markup=InlineKeyboardMarkup(_main_menu_kb()),
     )
 
 
@@ -169,36 +163,53 @@ async def cb_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
         return await _show_my_targets(query, context)
     elif query.data == "toggle_dry":
         return await _toggle_dry_run(query, context)
+    elif query.data == "toggle_autobuy":
+        return await _toggle_auto_buy(query, context)
     elif query.data == "main_menu":
-        kb = [
-            [InlineKeyboardButton("Добавить таргет", callback_data="add_target")],
-            [InlineKeyboardButton("Мои таргеты", callback_data="my_targets")],
-            [
-                InlineKeyboardButton(
-                    f"Dry-run: {'ON' if _dry_run else 'OFF'}", callback_data="toggle_dry"
-                )
-            ],
-        ]
         await query.edit_message_text(
-            "Снайпер-бот. Выбери действие:", reply_markup=InlineKeyboardMarkup(kb)
+            "Снайпер-бот. Выбери действие:",
+            reply_markup=InlineKeyboardMarkup(_main_menu_kb()),
         )
     return None
+
+
+def _main_menu_kb() -> list[list[InlineKeyboardButton]]:
+    """Build main menu keyboard with current toggle states."""
+    auto_buy_label = "Автопокупка: ON" if is_auto_buy() else "Автопокупка: OFF"
+    return [
+        [InlineKeyboardButton("Добавить таргет", callback_data="add_target")],
+        [InlineKeyboardButton("Мои таргеты", callback_data="my_targets")],
+        [
+            InlineKeyboardButton(
+                f"Dry-run: {'ON' if _dry_run else 'OFF'}",
+                callback_data="toggle_dry",
+            ),
+            InlineKeyboardButton(auto_buy_label, callback_data="toggle_autobuy"),
+        ],
+    ]
 
 
 async def _toggle_dry_run(query, context: ContextTypes.DEFAULT_TYPE) -> None:
     global _dry_run
     _dry_run = not _dry_run
-    kb = [
-        [InlineKeyboardButton("Добавить таргет", callback_data="add_target")],
-        [InlineKeyboardButton("Мои таргеты", callback_data="my_targets")],
-        [
-            InlineKeyboardButton(
-                f"Dry-run: {'ON' if _dry_run else 'OFF'}", callback_data="toggle_dry"
-            )
-        ],
-    ]
     status = "включен (покупки НЕ делаются)" if _dry_run else "ВЫКЛЮЧЕН (покупки АКТИВНЫ)"
-    await query.edit_message_text(f"Dry-run {status}", reply_markup=InlineKeyboardMarkup(kb))
+    await query.edit_message_text(
+        f"Dry-run {status}",
+        reply_markup=InlineKeyboardMarkup(_main_menu_kb()),
+    )
+
+
+async def _toggle_auto_buy(query, context: ContextTypes.DEFAULT_TYPE) -> None:
+    set_auto_buy(not is_auto_buy())
+    status = (
+        "ON — бот покупает на маркетах автоматически"
+        if is_auto_buy()
+        else "OFF — только уведомления"
+    )
+    await query.edit_message_text(
+        f"Автопокупка маркетов: {status}",
+        reply_markup=InlineKeyboardMarkup(_main_menu_kb()),
+    )
 
 
 _COLLECTIONS_PAGE_SIZE = 20
@@ -494,6 +505,7 @@ async def cb_set_payment(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     summary += f"\nОплата: {payment_label[method]}"
     summary += f"\nМаркеты: {markets_label}"
     summary += f"\nDry-run: {'ON' if _dry_run else 'OFF'}"
+    summary += f"\nАвтопокупка маркетов: {'ON' if is_auto_buy() else 'OFF'}"
     summary += f"\n\nВсего активных таргетов: {len(_active_targets)}"
 
     kb = [
@@ -536,15 +548,7 @@ async def cb_target_action(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     data = json.loads(query.data)
     action = data["a"]
-    menu_kb = [
-        [InlineKeyboardButton("Добавить таргет", callback_data="add_target")],
-        [InlineKeyboardButton("Мои таргеты", callback_data="my_targets")],
-        [
-            InlineKeyboardButton(
-                f"Dry-run: {'ON' if _dry_run else 'OFF'}", callback_data="toggle_dry"
-            )
-        ],
-    ]
+    menu_kb = _main_menu_kb()
 
     if action == "del_all":
         _active_targets.clear()
@@ -678,7 +682,7 @@ def build_application(bot_token: str, owner_id: int | None = None) -> Applicatio
         entry_points=[
             CallbackQueryHandler(
                 cb_main_menu,
-                pattern=r"^(add_target|my_targets|toggle_dry|main_menu)$",
+                pattern=r"^(add_target|my_targets|toggle_dry|toggle_autobuy|main_menu)$",
             ),
         ],
         states={
@@ -720,7 +724,10 @@ def build_application(bot_token: str, owner_id: int | None = None) -> Applicatio
     )
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, msg_edit_price))
     app.add_handler(
-        CallbackQueryHandler(cb_main_menu, pattern=r"^(my_targets|toggle_dry|main_menu)$")
+        CallbackQueryHandler(
+            cb_main_menu,
+            pattern=r"^(my_targets|toggle_dry|toggle_autobuy|main_menu)$",
+        )
     )
 
     return app
