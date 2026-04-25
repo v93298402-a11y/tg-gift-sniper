@@ -13,6 +13,16 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
+
+class _MarketAuthError(Exception):
+    """Raised when a marketplace returns 401/403 — caller should re-auth."""
+
+    def __init__(self, marketplace: str, status: int):
+        super().__init__(f"{marketplace} auth error {status}")
+        self.marketplace = marketplace
+        self.status = status
+
+
 _TONNEL_URL = "https://gifts2.tonnel.network/api/pageGifts"
 _MRKT_URL = "https://api.tgmrkt.io/api/v1/gifts/saling"
 _MRKT_BUY_URL = "https://api.tgmrkt.io/api/v1/gifts/buy"
@@ -158,8 +168,12 @@ async def _poll_mrkt(
         if resp.status_code == 429:
             logger.warning("MRKT 429 rate-limited for %s", target.gift_name)
             return []
+        if resp.status_code in (401, 403):
+            raise _MarketAuthError("MRKT", resp.status_code)
         resp.raise_for_status()
         data = resp.json()
+    except _MarketAuthError:
+        raise
     except httpx.HTTPStatusError:
         logger.warning("MRKT HTTP error for %s", target.gift_name, exc_info=True)
         return []
@@ -251,10 +265,11 @@ async def _poll_portals(
     try:
         resp = await client.get(_PORTALS_SEARCH_URL, params=params, headers=headers, timeout=10)
         if resp.status_code in (401, 403):
-            logger.warning("Portals auth error %d for %s", resp.status_code, target.gift_name)
-            return []
+            raise _MarketAuthError("Portals", resp.status_code)
         resp.raise_for_status()
         data = resp.json()
+    except _MarketAuthError:
+        raise
     except httpx.HTTPStatusError:
         logger.warning("Portals HTTP error for %s", target.gift_name, exc_info=True)
         return []
@@ -378,6 +393,8 @@ async def run_market_monitor(
     mrkt_token: str = "",
     portals_token: str = "",
     target_fn: Callable[[], list[MarketTarget]] | None = None,
+    mrkt_reauth_fn: Callable[[], Coroutine[Any, Any, str]] | None = None,
+    portals_reauth_fn: Callable[[], Coroutine[Any, Any, str]] | None = None,
 ) -> None:
     """Continuously poll third-party marketplaces and send notifications.
 
@@ -434,6 +451,39 @@ async def run_market_monitor(
                     for r in results:
                         if isinstance(r, list):
                             all_listings.extend(r)
+                        elif isinstance(r, _MarketAuthError):
+                            if r.marketplace == "MRKT" and mrkt_reauth_fn:
+                                logger.warning(
+                                    "MRKT auth expired (status %d), re-fetching token…",
+                                    r.status,
+                                )
+                                try:
+                                    new_token = await mrkt_reauth_fn()
+                                except Exception:
+                                    logger.exception("MRKT re-auth failed")
+                                    new_token = ""
+                                if new_token:
+                                    mrkt_token = new_token
+                                    logger.info("MRKT token refreshed")
+                            elif r.marketplace == "Portals" and portals_reauth_fn:
+                                logger.warning(
+                                    "Portals auth expired (status %d), re-fetching token…",
+                                    r.status,
+                                )
+                                try:
+                                    new_token = await portals_reauth_fn()
+                                except Exception:
+                                    logger.exception("Portals re-auth failed")
+                                    new_token = ""
+                                if new_token:
+                                    portals_token = new_token
+                                    logger.info("Portals token refreshed")
+                            else:
+                                logger.warning(
+                                    "%s auth error %d (no re-auth fn configured)",
+                                    r.marketplace,
+                                    r.status,
+                                )
                         elif isinstance(r, Exception):
                             _error_count += 1
                             logger.warning("Market poll error: %s", r)

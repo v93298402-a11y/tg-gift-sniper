@@ -115,6 +115,12 @@ async def _run(cfg: Config, bot_mode: bool = False, self_mode: bool = False) -> 
         logger.info("Auto-fetching Portals auth token…")
         portals_token = await get_portals_token(client)
 
+    async def _refresh_mrkt_token() -> str:
+        return await get_mrkt_token(client)
+
+    async def _refresh_portals_token() -> str:
+        return await get_portals_token(client)
+
     # Build dynamic target getter that merges config + bot targets
     cfg_market_targets = [
         MktTarget(
@@ -164,6 +170,8 @@ async def _run(cfg: Config, bot_mode: bool = False, self_mode: bool = False) -> 
             mrkt_token=mrkt_token,
             portals_token=portals_token,
             target_fn=_get_market_targets,
+            mrkt_reauth_fn=_refresh_mrkt_token,
+            portals_reauth_fn=_refresh_portals_token,
         )
     )
     logger.info("Market monitor started")
