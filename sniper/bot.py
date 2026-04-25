@@ -516,16 +516,18 @@ async def _show_my_targets(query, context: ContextTypes.DEFAULT_TYPE) -> None:
         )
         return
 
-    text = "Активные таргеты:\n\n"
+    text = "Активные таргеты:\n"
     buttons = []
     for i, t in enumerate(_active_targets):
         pay = "TON" if t["pay_with_ton"] else "Stars"
         paused = " ⏸" if t.get("paused") else ""
-        line = f"{i + 1}. {t['name']} — max {t['max_price']} {pay}{paused}"
+        n = i + 1
+        label = f"{n}. {t['name']}"
         if t.get("model"):
-            line += f" [{t['model']}]"
-        text += line + "\n"
+            label += f" [{t['model']}]"
+        label += f" — {t['max_price']} {pay}{paused}"
         row = [
+            InlineKeyboardButton(label, callback_data=f'{{"a":"info","i":{i}}}'),
             InlineKeyboardButton("✏️", callback_data=f'{{"a":"edit","i":{i}}}'),
             InlineKeyboardButton(
                 "▶️" if t.get("paused") else "⏸",
@@ -584,6 +586,10 @@ async def cb_target_action(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await query.edit_message_text(
             f"{t['name']}: {state}", reply_markup=InlineKeyboardMarkup(menu_kb)
         )
+        return
+
+    if action == "info":
+        await _show_my_targets(query, context)
         return
 
     if action == "edit":
@@ -699,7 +705,9 @@ def build_application(bot_token: str, owner_id: int | None = None) -> Applicatio
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("menu", cmd_menu))
     app.add_handler(conv_handler)
-    app.add_handler(CallbackQueryHandler(cb_target_action, pattern=r'^\{.*"a":"(del|pause|edit)'))
+    app.add_handler(
+        CallbackQueryHandler(cb_target_action, pattern=r'^\{.*"a":"(del|pause|edit|info)')
+    )
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, msg_edit_price))
     app.add_handler(
         CallbackQueryHandler(cb_main_menu, pattern=r"^(my_targets|toggle_dry|main_menu)$")
