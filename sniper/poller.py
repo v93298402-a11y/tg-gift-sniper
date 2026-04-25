@@ -49,19 +49,23 @@ def get_stats() -> dict[str, int]:
     return dict(_stats)
 
 
-def _extract_prices(gift: types.StarGiftUnique) -> dict[str, int]:
+_NANOTON = 1_000_000_000
+
+
+def _extract_prices(gift: types.StarGiftUnique) -> dict[str, float]:
     """Extract resale prices from a StarGiftUnique.
 
-    Returns dict with 'stars' and/or 'ton' keys.
+    Returns dict with 'stars' (int) and/or 'ton' (float, in TON) keys.
+    StarsTonAmount comes in nanotons, so we convert to TON.
     """
-    prices: dict[str, int] = {}
+    prices: dict[str, float] = {}
     if not gift.resell_amount:
         return prices
     for amt in gift.resell_amount:
         if isinstance(amt, types.StarsAmount):
-            prices["stars"] = int(amt.amount)
+            prices["stars"] = amt.amount
         elif isinstance(amt, types.StarsTonAmount):
-            prices["ton"] = int(amt.amount)
+            prices["ton"] = amt.amount / _NANOTON
     return prices
 
 
@@ -169,11 +173,12 @@ async def _poll_gift_id(
                 continue
 
             currency = "TON" if target.pay_with_ton else "Stars"
+            price_fmt = f"{price:.4f}" if target.pay_with_ton else str(int(price))
             logger.info(
-                "HIT: %s #%d — %d %s (max %d) slug=%s",
+                "HIT: %s #%d — %s %s (max %s) slug=%s",
                 target.name,
                 gift.num,
-                price,
+                price_fmt,
                 currency,
                 target.max_price,
                 slug,
@@ -187,7 +192,7 @@ async def _poll_gift_id(
                     msg = (
                         f"📍 Telegram Resale\n"
                         f"🎯 {target.name} #{gift.num}\n"
-                        f"Цена: {price} {currency} (макс {target.max_price})\n"
+                        f"Цена: {price_fmt} {currency} (макс {target.max_price})\n"
                         f"Slug: {slug}\n"
                         f"Dry-run: {'ON' if cfg.dry_run else 'OFF'}"
                     )

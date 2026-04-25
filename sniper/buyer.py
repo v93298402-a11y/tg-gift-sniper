@@ -32,7 +32,7 @@ async def buy_gift(
 
     if dry_run:
         logger.info(
-            "[DRY-RUN] Would buy '%s' (slug=%s) for %d %s",
+            "[DRY-RUN] Would buy '%s' (slug=%s) for %s %s",
             gift_title,
             slug,
             price,
