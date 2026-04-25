@@ -32,6 +32,7 @@ PICK_COLLECTION, PICK_MODEL, PICK_BACKDROP, PICK_PATTERN, SET_PRICE, SET_PAYMENT
 # Runtime state shared with sniper engine
 _active_targets: list[dict] = []
 _dry_run: bool = True
+_notifications_enabled: bool = True
 _owner_id: int | None = None
 _telethon_client: TelegramClient | None = None
 _targets_file: Path = Path("targets.json")
@@ -71,6 +72,10 @@ def get_market_targets() -> list[dict]:
 
 def is_dry_run() -> bool:
     return _dry_run
+
+
+def notifications_enabled() -> bool:
+    return _notifications_enabled
 
 
 def _check_owner(user_id: int) -> bool:
@@ -165,6 +170,8 @@ async def cb_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
         return await _toggle_dry_run(query, context)
     elif query.data == "toggle_autobuy":
         return await _toggle_auto_buy(query, context)
+    elif query.data == "toggle_notif":
+        return await _toggle_notifications(query, context)
     elif query.data == "main_menu":
         await query.edit_message_text(
             "Снайпер-бот. Выбери действие:",
@@ -176,6 +183,7 @@ async def cb_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
 def _main_menu_kb() -> list[list[InlineKeyboardButton]]:
     """Build main menu keyboard with current toggle states."""
     auto_buy_label = "Автопокупка: ON" if is_auto_buy() else "Автопокупка: OFF"
+    notif_label = "🔔 Уведомления: ON" if _notifications_enabled else "🔕 Уведомления: OFF"
     return [
         [InlineKeyboardButton("Добавить таргет", callback_data="add_target")],
         [InlineKeyboardButton("Мои таргеты", callback_data="my_targets")],
@@ -186,6 +194,7 @@ def _main_menu_kb() -> list[list[InlineKeyboardButton]]:
             ),
             InlineKeyboardButton(auto_buy_label, callback_data="toggle_autobuy"),
         ],
+        [InlineKeyboardButton(notif_label, callback_data="toggle_notif")],
     ]
 
 
@@ -208,6 +217,18 @@ async def _toggle_auto_buy(query, context: ContextTypes.DEFAULT_TYPE) -> None:
     )
     await query.edit_message_text(
         f"Автопокупка маркетов: {status}",
+        reply_markup=InlineKeyboardMarkup(_main_menu_kb()),
+    )
+
+
+async def _toggle_notifications(query, context: ContextTypes.DEFAULT_TYPE) -> None:
+    global _notifications_enabled
+    _notifications_enabled = not _notifications_enabled
+    status = (
+        "ON — уведомления приходят" if _notifications_enabled else "OFF — уведомления отключены"
+    )
+    await query.edit_message_text(
+        f"Уведомления: {status}",
         reply_markup=InlineKeyboardMarkup(_main_menu_kb()),
     )
 
@@ -682,7 +703,7 @@ def build_application(bot_token: str, owner_id: int | None = None) -> Applicatio
         entry_points=[
             CallbackQueryHandler(
                 cb_main_menu,
-                pattern=r"^(add_target|my_targets|toggle_dry|toggle_autobuy|main_menu)$",
+                pattern=r"^(add_target|my_targets|toggle_dry|toggle_autobuy|toggle_notif|main_menu)$",
             ),
         ],
         states={
@@ -726,7 +747,7 @@ def build_application(bot_token: str, owner_id: int | None = None) -> Applicatio
     app.add_handler(
         CallbackQueryHandler(
             cb_main_menu,
-            pattern=r"^(my_targets|toggle_dry|toggle_autobuy|main_menu)$",
+            pattern=r"^(my_targets|toggle_dry|toggle_autobuy|toggle_notif|main_menu)$",
         )
     )
 
@@ -740,6 +761,8 @@ def create_notifier(bot_token: str, chat_id: int):
     bot = Bot(token=bot_token)
 
     async def notify(text: str) -> None:
+        if not _notifications_enabled:
+            return
         await bot.send_message(chat_id=chat_id, text=text)
 
     return notify
