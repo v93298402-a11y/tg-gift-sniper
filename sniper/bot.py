@@ -44,6 +44,38 @@ _owner_id: int | None = None
 _telethon_client: TelegramClient | None = None
 _targets_file: Path = Path("targets.json")
 _menu_state_file: Path = Path("menu_state.json")
+_bot_state_file: Path = Path("bot_state.json")
+
+
+def _save_bot_state() -> None:
+    """Persist toggles (auto-buy, notifications) so they survive restarts."""
+    try:
+        _bot_state_file.write_text(
+            json.dumps(
+                {
+                    "auto_buy": is_auto_buy(),
+                    "notifications": _notifications_enabled,
+                }
+            )
+        )
+    except Exception:
+        logger.exception("Failed to save bot state")
+
+
+def _load_bot_state() -> None:
+    """Restore toggles from disk; defaults stay if file is missing/corrupt."""
+    global _notifications_enabled
+    if not _bot_state_file.exists():
+        return
+    try:
+        data = json.loads(_bot_state_file.read_text())
+    except Exception:
+        logger.exception("Failed to load bot state")
+        return
+    if "auto_buy" in data:
+        set_auto_buy(bool(data["auto_buy"]))
+    if "notifications" in data:
+        _notifications_enabled = bool(data["notifications"])
 
 
 def _load_last_menu_msg() -> int | None:
@@ -256,6 +288,7 @@ def _main_menu_kb() -> list[list[InlineKeyboardButton]]:
 
 async def _toggle_auto_buy(query, context: ContextTypes.DEFAULT_TYPE) -> None:
     set_auto_buy(not is_auto_buy())
+    _save_bot_state()
     status = (
         "ON — бот покупает автоматически (Telegram + MRKT + Portals)"
         if is_auto_buy()
@@ -270,6 +303,7 @@ async def _toggle_auto_buy(query, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def _toggle_notifications(query, context: ContextTypes.DEFAULT_TYPE) -> None:
     global _notifications_enabled
     _notifications_enabled = not _notifications_enabled
+    _save_bot_state()
     status = (
         "ON — уведомления приходят" if _notifications_enabled else "OFF — уведомления отключены"
     )
@@ -1181,6 +1215,8 @@ def create_notifier(bot_token: str, chat_id: int):
 def set_telethon_client(client: TelegramClient, cfg: object | None = None) -> None:
     global _telethon_client
     _telethon_client = client
+
+    _load_bot_state()
 
     saved = _load_targets()
     if saved:

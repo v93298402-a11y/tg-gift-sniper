@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 async def buy_gift(
     client: TelegramClient,
     slug: str,
-    price: int,
+    price: float,
     gift_title: str,
     dry_run: bool = True,
     pay_with_ton: bool = False,
@@ -26,6 +26,7 @@ async def buy_gift(
     Returns True on success, False on failure.
     """
     currency = "TON" if pay_with_ton else "Stars"
+    price_fmt = f"{price:.4f}" if pay_with_ton else str(int(price))
     me = await client.get_me()
     to_peer = types.InputPeerUser(user_id=me.id, access_hash=me.access_hash)
     invoice = types.InputInvoiceStarGiftResale(slug=slug, to_id=to_peer)
@@ -35,15 +36,16 @@ async def buy_gift(
             "[DRY-RUN] Would buy '%s' (slug=%s) for %s %s",
             gift_title,
             slug,
-            price,
+            price_fmt,
             currency,
         )
         return True
 
     try:
-        form_req = functions.payments.GetPaymentFormRequest(invoice=invoice)
         if pay_with_ton:
             form_req = functions.payments.GetPaymentFormRequest(invoice=invoice, ton=True)
+        else:
+            form_req = functions.payments.GetPaymentFormRequest(invoice=invoice)
         form = await client(form_req)
         form_id = form.form_id
         logger.debug("Got payment form: form_id=%d", form_id)
@@ -54,10 +56,10 @@ async def buy_gift(
 
         if isinstance(result, types.payments.PaymentResult):
             logger.info(
-                "Bought '%s' (slug=%s) for %d %s",
+                "Bought '%s' (slug=%s) for %s %s",
                 gift_title,
                 slug,
-                price,
+                price_fmt,
                 currency,
             )
             return True

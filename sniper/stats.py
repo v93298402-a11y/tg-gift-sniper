@@ -25,7 +25,9 @@ class SaleRecord:
 # Current floor price per collection (lowest active listing)
 _floor_prices: dict[str, float] = {}
 
-# All active listing IDs → their data (for detecting disappearances)
+# All active listing IDs → their data (for detecting disappearances).
+# Listing IDs are prefixed with "<marketplace>:<collection>:<id>" so we can
+# recompute the cross-market floor by scanning only the relevant entries.
 _active_listings: dict[str, dict] = {}
 
 # Sales log (items that disappeared from listings)
@@ -59,13 +61,10 @@ def record_listings(
     prefix = f"{marketplace}:{collection}:"
     current_ids = set()
 
-    floor = None
     for li in listings:
         lid = prefix + str(li["id"])
         current_ids.add(lid)
         price = li["price"]
-        if floor is None or price < floor:
-            floor = price
         _active_listings[lid] = {
             "collection": collection,
             "marketplace": marketplace,
@@ -77,18 +76,31 @@ def record_listings(
             "seen_at": time.time(),
         }
 
-    if floor is not None:
-        _floor_prices[collection] = floor
-
-    # Find disappeared listings (sold)
+    # Find disappeared listings (sold) for this marketplace+collection only
     gone = []
     for lid, data in list(_active_listings.items()):
         if lid.startswith(prefix) and lid not in current_ids:
             gone.append((lid, data))
-
-    coll_floor = _floor_prices.get(collection)
-    for lid, data in gone:
+    # Remove gone listings before recomputing floor so the new floor
+    # reflects the *remaining* listings, not the sold-at price itself.
+    for lid, _ in gone:
         del _active_listings[lid]
+
+    # Recompute floor as the minimum price across ALL active listings of
+    # this collection (across every marketplace), not just this batch.
+    coll_floor: float | None = None
+    for lid, data in _active_listings.items():
+        if data["collection"] != collection:
+            continue
+        if coll_floor is None or data["price"] < coll_floor:
+            coll_floor = data["price"]
+    if coll_floor is not None:
+        _floor_prices[collection] = coll_floor
+    elif collection in _floor_prices:
+        # No listings remain — drop stale floor.
+        del _floor_prices[collection]
+
+    for lid, data in gone:
         if coll_floor and coll_floor > 0:
             discount = (1 - data["price"] / coll_floor) * 100
         else:

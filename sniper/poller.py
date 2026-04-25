@@ -226,32 +226,16 @@ async def _poll_gift_id(
 
             _stats["buys_attempted"] += 1
 
-            if _notify_fn:
-                try:
-                    tg_link = f"https://t.me/nft/{slug}" if slug else ""
-                    link_line = f"\n🔗 {tg_link}" if tg_link else ""
-                    from sniper.markets import is_auto_buy
-
-                    buy_status = "Автопокупка: ON" if is_auto_buy() else "Автопокупка: OFF"
-                    msg = (
-                        f"📍 Telegram Resale\n"
-                        f"🎯 {target.name} #{gift.num}\n"
-                        f"Цена: {price_fmt} {currency} (макс {target.max_price})\n"
-                        f"{buy_status}"
-                        f"{link_line}"
-                    )
-                    await _notify_fn(msg)
-                except Exception:
-                    logger.exception("Failed to send bot notification")
-
             from sniper.markets import is_auto_buy as _is_auto_buy
+
+            auto_buy_on = _is_auto_buy()
 
             ok = await buy_gift(
                 client,
                 slug=slug,
                 price=price,
                 gift_title=f"{target.name} #{gift.num}",
-                dry_run=not _is_auto_buy(),
+                dry_run=not auto_buy_on,
                 pay_with_ton=target.pay_with_ton,
             )
             if ok:
@@ -260,6 +244,26 @@ async def _poll_gift_id(
                     await _send_notification(client, cfg.notify_chat_id, target, gift, price)
             else:
                 _stats["buys_fail"] += 1
+
+            if _notify_fn:
+                try:
+                    tg_link = f"https://t.me/nft/{slug}" if slug else ""
+                    link_line = f"\n🔗 {tg_link}" if tg_link else ""
+                    if auto_buy_on:
+                        buy_result = "\n✅ Куплено!" if ok else "\n❌ Покупка не удалась"
+                    else:
+                        buy_result = "\nАвтопокупка: OFF"
+                    msg = (
+                        f"📍 Telegram Resale\n"
+                        f"🎯 {target.name} #{gift.num}\n"
+                        f"Цена: {price_fmt} {currency} (макс {target.max_price})"
+                        f"{buy_result}"
+                        f"{link_line}"
+                    )
+                    await _notify_fn(msg)
+                except Exception:
+                    logger.exception("Failed to send bot notification")
+
             break  # gift matched a target, move to next gift
 
 
@@ -268,13 +272,15 @@ async def _send_notification(
     chat_id: int,
     target: TargetGift,
     gift: types.StarGiftUnique,
-    price: int,
+    price: float,
 ) -> None:
     currency = "TON" if target.pay_with_ton else "Stars"
+    price_fmt = f"{price:.4f}" if target.pay_with_ton else str(int(price))
     try:
         await client.send_message(
             chat_id,
-            f"Bought **{target.name} #{gift.num}** for {price} {currency}\nSlug: `{gift.slug}`",
+            f"Bought **{target.name} #{gift.num}** for {price_fmt} {currency}\n"
+            f"Slug: `{gift.slug}`",
             parse_mode="md",
         )
     except Exception:
