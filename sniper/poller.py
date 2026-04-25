@@ -156,6 +156,10 @@ async def _poll_gift_id(
 
         if slug in _seen_slugs:
             continue
+        _seen_slugs.add(slug)
+
+        if not _warmed_up:
+            continue
 
         for target in targets:
             price_key = "ton" if target.pay_with_ton else "stars"
@@ -184,7 +188,6 @@ async def _poll_gift_id(
                 slug,
             )
 
-            _seen_slugs.add(slug)
             _stats["buys_attempted"] += 1
 
             if _notify_fn:
@@ -253,6 +256,9 @@ def _bot_targets_to_config(bot_targets: list[dict]) -> list[TargetGift]:
     ]
 
 
+_warmed_up = False
+
+
 async def run_loop(
     client: TelegramClient,
     cfg: Config,
@@ -260,6 +266,7 @@ async def run_loop(
     self_mode: bool = False,
 ) -> None:
     """Main polling loop — runs until cancelled."""
+    global _warmed_up
     reload_counter = 0
     logger.info(
         "Starting sniper loop: %d targets, interval=%.1fs, dry_run=%s",
@@ -293,6 +300,10 @@ async def run_loop(
 
         for gift_id, targets in by_gift.items():
             await _poll_gift_id(client, gift_id, targets, cfg)
+
+        if not _warmed_up:
+            _warmed_up = True
+            logger.info("Sniper warm-up done, %d slugs cached", len(_seen_slugs))
 
         elapsed = time.monotonic() - t0
         sleep_for = max(0.1, cfg.poll_interval - elapsed)

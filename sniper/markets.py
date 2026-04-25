@@ -327,6 +327,7 @@ async def run_market_monitor(
 
     _error_count = 0
     _last_error_alert = 0.0
+    _warmed_up = False
 
     async with httpx.AsyncClient() as client:
         while True:
@@ -380,6 +381,9 @@ async def run_market_monitor(
                         continue
                     _seen_market_ids.add(listing.listing_id)
 
+                    if not _warmed_up:
+                        continue
+
                     logger.info(
                         "MARKET HIT [%s]: %s #%s — %.4f %s",
                         listing.marketplace,
@@ -405,6 +409,13 @@ async def run_market_monitor(
                             await notify_fn(msg)
                         except Exception:
                             logger.exception("Failed to send market notification")
+
+            if not _warmed_up:
+                _warmed_up = True
+                logger.info(
+                    "Market monitor warm-up done, %d listings cached",
+                    len(_seen_market_ids),
+                )
 
             elapsed = time.monotonic() - t0
             sleep_for = max(0.5, poll_interval - elapsed)
