@@ -554,6 +554,18 @@ def build_application(bot_token: str, owner_id: int | None = None) -> Applicatio
     return app
 
 
+def create_notifier(bot_token: str, chat_id: int):
+    """Create an async notification function that sends via Bot API."""
+    from telegram import Bot
+
+    bot = Bot(token=bot_token)
+
+    async def notify(text: str) -> None:
+        await bot.send_message(chat_id=chat_id, text=text)
+
+    return notify
+
+
 def set_telethon_client(client: TelegramClient, cfg: object | None = None) -> None:
     global _telethon_client, _dry_run
     _telethon_client = client

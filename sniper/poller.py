@@ -6,7 +6,8 @@ import asyncio
 import logging
 import time
 from collections import defaultdict
-from typing import TYPE_CHECKING
+from collections.abc import Callable, Coroutine
+from typing import TYPE_CHECKING, Any
 
 from telethon import functions, types
 from telethon.errors import BadRequestError, FloodWaitError
@@ -23,6 +24,15 @@ logger = logging.getLogger(__name__)
 
 # Keep track of slugs we already attempted to buy (avoid double-buying)
 _seen_slugs: set[str] = set()
+
+# Optional bot notification callback (set from __main__)
+_notify_fn: Callable[..., Coroutine[Any, Any, None]] | None = None
+
+
+def set_notify_fn(fn: Callable[..., Coroutine[Any, Any, None]]) -> None:
+    global _notify_fn
+    _notify_fn = fn
+
 
 # Stats
 _stats = {
@@ -158,6 +168,19 @@ async def _poll_gift_id(
 
             _seen_slugs.add(slug)
             _stats["buys_attempted"] += 1
+
+            if _notify_fn:
+                try:
+                    currency = "TON" if target.pay_with_ton else "Stars"
+                    msg = (
+                        f"🎯 Найден: {target.name} #{gift.num}\n"
+                        f"Цена: {price} {currency} (макс {target.max_price})\n"
+                        f"Slug: {slug}\n"
+                        f"Dry-run: {'ON' if cfg.dry_run else 'OFF'}"
+                    )
+                    await _notify_fn(msg)
+                except Exception:
+                    logger.exception("Failed to send bot notification")
 
             ok = await buy_gift(
                 client,

@@ -71,7 +71,7 @@ async def _run(cfg: Config, bot_mode: bool = False, self_mode: bool = False) -> 
         logger.info("Saved Messages interface enabled. Send /menu to Saved Messages.")
 
     if bot_mode:
-        from sniper.bot import build_application, set_telethon_client
+        from sniper.bot import build_application, create_notifier, set_telethon_client
 
         bot_token = os.getenv("BOT_TOKEN", "")
         if not bot_token:
@@ -81,6 +81,11 @@ async def _run(cfg: Config, bot_mode: bool = False, self_mode: bool = False) -> 
 
         set_telethon_client(client, cfg)
         app = build_application(bot_token, owner_id=me.id)
+
+        from sniper.poller import set_notify_fn
+
+        set_notify_fn(create_notifier(bot_token, me.id))
+        logger.info("Bot notifications enabled for user %d", me.id)
 
         use_dynamic_targets = True
         logger.info("Starting bot interface…")
