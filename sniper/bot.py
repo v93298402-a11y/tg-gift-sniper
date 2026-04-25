@@ -536,17 +536,28 @@ async def cb_delete_target(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     await query.answer()
 
     data = json.loads(query.data)
+    kb = [
+        [InlineKeyboardButton("Добавить таргет", callback_data="add_target")],
+        [InlineKeyboardButton("Мои таргеты", callback_data="my_targets")],
+        [
+            InlineKeyboardButton(
+                f"Dry-run: {'ON' if _dry_run else 'OFF'}", callback_data="toggle_dry"
+            )
+        ],
+    ]
     if data["a"] == "del_all":
         _active_targets.clear()
         _save_targets()
-        await query.edit_message_text("Все таргеты удалены.")
+        await query.edit_message_text("Все таргеты удалены.", reply_markup=InlineKeyboardMarkup(kb))
         return
     if data["a"] == "del":
         idx = data["i"]
         if 0 <= idx < len(_active_targets):
             removed = _active_targets.pop(idx)
             _save_targets()
-            await query.edit_message_text(f"Удалён: {removed['name']}")
+            await query.edit_message_text(
+                f"Удалён: {removed['name']}", reply_markup=InlineKeyboardMarkup(kb)
+            )
         return
 
 
