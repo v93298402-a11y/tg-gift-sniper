@@ -55,13 +55,15 @@ def _load_targets() -> list[dict]:
 
 
 def get_active_targets() -> list[dict]:
-    return list(_active_targets)
+    return [t for t in _active_targets if not t.get("paused")]
 
 
 def get_market_targets() -> list[dict]:
     """Return targets that have marketplace monitoring enabled."""
     return [
-        t for t in _active_targets if t.get("market_max_price") and t.get("market_max_price") > 0
+        t
+        for t in _active_targets
+        if not t.get("paused") and t.get("market_max_price") and t.get("market_max_price") > 0
     ]
 
 
@@ -518,25 +520,33 @@ async def _show_my_targets(query, context: ContextTypes.DEFAULT_TYPE) -> None:
     buttons = []
     for i, t in enumerate(_active_targets):
         pay = "TON" if t["pay_with_ton"] else "Stars"
-        line = f"{i + 1}. {t['name']} — max {t['max_price']} {pay}"
+        paused = " ⏸" if t.get("paused") else ""
+        line = f"{i + 1}. {t['name']} — max {t['max_price']} {pay}{paused}"
         if t.get("model"):
             line += f" [{t['model']}]"
         text += line + "\n"
-        buttons.append(
-            [InlineKeyboardButton(f"Удалить #{i + 1}", callback_data=f'{{"a":"del","i":{i}}}')]
-        )
+        row = [
+            InlineKeyboardButton("✏️", callback_data=f'{{"a":"edit","i":{i}}}'),
+            InlineKeyboardButton(
+                "▶️" if t.get("paused") else "⏸",
+                callback_data=f'{{"a":"pause","i":{i}}}',
+            ),
+            InlineKeyboardButton("🗑", callback_data=f'{{"a":"del","i":{i}}}'),
+        ]
+        buttons.append(row)
 
     buttons.append([InlineKeyboardButton("Удалить все", callback_data='{"a":"del_all"}')])
     buttons.append([InlineKeyboardButton("« Главное меню", callback_data="main_menu")])
     await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(buttons))
 
 
-async def cb_delete_target(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def cb_target_action(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     await query.answer()
 
     data = json.loads(query.data)
-    kb = [
+    action = data["a"]
+    menu_kb = [
         [InlineKeyboardButton("Добавить таргет", callback_data="add_target")],
         [InlineKeyboardButton("Мои таргеты", callback_data="my_targets")],
         [
@@ -545,20 +555,83 @@ async def cb_delete_target(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             )
         ],
     ]
-    if data["a"] == "del_all":
+
+    if action == "del_all":
         _active_targets.clear()
         _save_targets()
-        await query.edit_message_text("Все таргеты удалены.", reply_markup=InlineKeyboardMarkup(kb))
+        await query.edit_message_text(
+            "Все таргеты удалены.", reply_markup=InlineKeyboardMarkup(menu_kb)
+        )
         return
-    if data["a"] == "del":
-        idx = data["i"]
-        if 0 <= idx < len(_active_targets):
-            removed = _active_targets.pop(idx)
-            _save_targets()
-            await query.edit_message_text(
-                f"Удалён: {removed['name']}", reply_markup=InlineKeyboardMarkup(kb)
-            )
+
+    idx = data.get("i", -1)
+    if idx < 0 or idx >= len(_active_targets):
         return
+
+    if action == "del":
+        removed = _active_targets.pop(idx)
+        _save_targets()
+        await query.edit_message_text(
+            f"Удалён: {removed['name']}", reply_markup=InlineKeyboardMarkup(menu_kb)
+        )
+        return
+
+    if action == "pause":
+        t = _active_targets[idx]
+        t["paused"] = not t.get("paused", False)
+        _save_targets()
+        state = "⏸ Пауза" if t["paused"] else "▶️ Активен"
+        await query.edit_message_text(
+            f"{t['name']}: {state}", reply_markup=InlineKeyboardMarkup(menu_kb)
+        )
+        return
+
+    if action == "edit":
+        t = _active_targets[idx]
+        context.user_data["_edit_idx"] = idx
+        pay = "TON" if t["pay_with_ton"] else "Stars"
+        text = (
+            f"Редактирование: {t['name']}\n"
+            f"Текущая макс. цена: {t['max_price']} {pay}\n\n"
+            f"Введи новую макс. цену:"
+        )
+        await query.edit_message_text(text)
+        return
+
+
+async def msg_edit_price(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle new price input for target editing."""
+    idx = context.user_data.get("_edit_idx")
+    if idx is None or idx < 0 or idx >= len(_active_targets):
+        await update.message.reply_text("Ошибка. Попробуй снова через /start")
+        return
+
+    text = update.message.text.strip()
+    try:
+        new_price = int(text) if text.isdigit() else float(text)
+        if new_price <= 0:
+            raise ValueError
+    except ValueError:
+        await update.message.reply_text("Введи положительное число:")
+        return
+
+    t = _active_targets[idx]
+    old_price = t["max_price"]
+    t["max_price"] = new_price
+    if t.get("pay_with_ton"):
+        t["market_max_price"] = new_price
+    _save_targets()
+    context.user_data.pop("_edit_idx", None)
+
+    pay = "TON" if t["pay_with_ton"] else "Stars"
+    kb = [
+        [InlineKeyboardButton("Мои таргеты", callback_data="my_targets")],
+        [InlineKeyboardButton("« Главное меню", callback_data="main_menu")],
+    ]
+    await update.message.reply_text(
+        f"Цена обновлена: {t['name']}\n{old_price} → {new_price} {pay}",
+        reply_markup=InlineKeyboardMarkup(kb),
+    )
 
 
 async def cb_nav(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -626,7 +699,8 @@ def build_application(bot_token: str, owner_id: int | None = None) -> Applicatio
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("menu", cmd_menu))
     app.add_handler(conv_handler)
-    app.add_handler(CallbackQueryHandler(cb_delete_target, pattern=r'^\{.*"a":"del'))
+    app.add_handler(CallbackQueryHandler(cb_target_action, pattern=r'^\{.*"a":"(del|pause|edit)'))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, msg_edit_price))
     app.add_handler(
         CallbackQueryHandler(cb_main_menu, pattern=r"^(my_targets|toggle_dry|main_menu)$")
     )

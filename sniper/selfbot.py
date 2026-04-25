@@ -42,13 +42,15 @@ def _load_targets() -> list[dict]:
 
 
 def get_active_targets() -> list[dict]:
-    return list(_active_targets)
+    return [t for t in _active_targets if not t.get("paused")]
 
 
 def get_market_targets() -> list[dict]:
     """Return targets that have marketplace monitoring enabled."""
     return [
-        t for t in _active_targets if t.get("market_max_price") and t.get("market_max_price") > 0
+        t
+        for t in _active_targets
+        if not t.get("paused") and t.get("market_max_price") and t.get("market_max_price") > 0
     ]
 
 

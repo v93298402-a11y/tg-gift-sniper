@@ -77,7 +77,7 @@ async def _poll_tonnel(
         resp.raise_for_status()
         data = resp.json()
     except Exception:
-        logger.debug("Tonnel request failed for %s", target.gift_name)
+        logger.warning("Tonnel request failed for %s", target.gift_name, exc_info=True)
         return []
 
     listings = []
@@ -139,7 +139,7 @@ async def _poll_mrkt(
         resp.raise_for_status()
         data = resp.json()
     except Exception:
-        logger.debug("MRKT request failed for %s", target.gift_name)
+        logger.warning("MRKT request failed for %s", target.gift_name, exc_info=True)
         return []
 
     listings = []
@@ -196,7 +196,7 @@ async def _poll_portals(
         resp.raise_for_status()
         data = resp.json()
     except Exception:
-        logger.debug("Portals request failed for %s", target.gift_name)
+        logger.warning("Portals request failed for %s", target.gift_name, exc_info=True)
         return []
 
     listings = []
@@ -271,11 +271,18 @@ async def run_market_monitor(
         poll_interval,
     )
 
+    _error_count = 0
+    _last_error_alert = 0.0
+
     async with httpx.AsyncClient() as client:
         while True:
             t0 = time.monotonic()
 
             current_targets = target_fn() if target_fn else (targets or [])
+            if not current_targets:
+                await asyncio.sleep(poll_interval)
+                continue
+
             for target in current_targets:
                 all_listings: list[MarketListing] = []
 
@@ -292,6 +299,19 @@ async def run_market_monitor(
                     for r in results:
                         if isinstance(r, list):
                             all_listings.extend(r)
+                        elif isinstance(r, Exception):
+                            _error_count += 1
+                            logger.warning("Market poll error: %s", r)
+                            if (
+                                notify_fn
+                                and _error_count >= 3
+                                and (time.monotonic() - _last_error_alert) > 300
+                            ):
+                                _last_error_alert = time.monotonic()
+                                try:
+                                    await notify_fn(f"⚠️ Ошибки маркетов ({_error_count}x)\n{r}")
+                                except Exception:
+                                    pass
 
                 for listing in all_listings:
                     if listing.listing_id in _seen_market_ids:
