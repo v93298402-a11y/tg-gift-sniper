@@ -74,10 +74,16 @@ async def _poll_tonnel(
 
     try:
         resp = await client.post(_TONNEL_URL, json=body, timeout=10)
+        if resp.status_code == 403:
+            logger.warning("Tonnel 403 Forbidden for %s (IP blocked?)", target.gift_name)
+            return []
         resp.raise_for_status()
         data = resp.json()
+    except httpx.HTTPStatusError:
+        logger.warning("Tonnel HTTP error for %s", target.gift_name, exc_info=True)
+        return []
     except Exception:
-        logger.warning("Tonnel request failed for %s", target.gift_name, exc_info=True)
+        logger.warning("Tonnel request failed for %s", target.gift_name)
         return []
 
     listings = []
@@ -136,10 +142,16 @@ async def _poll_mrkt(
     headers = {"Authorization": auth_token}
     try:
         resp = await client.post(_MRKT_URL, json=body, headers=headers, timeout=10)
+        if resp.status_code == 429:
+            logger.warning("MRKT 429 rate-limited for %s", target.gift_name)
+            return []
         resp.raise_for_status()
         data = resp.json()
+    except httpx.HTTPStatusError:
+        logger.warning("MRKT HTTP error for %s", target.gift_name, exc_info=True)
+        return []
     except Exception:
-        logger.warning("MRKT request failed for %s", target.gift_name, exc_info=True)
+        logger.warning("MRKT request failed for %s", target.gift_name)
         return []
 
     listings = []
@@ -184,7 +196,6 @@ async def _poll_portals(
         "limit": 10,
         "offset": 0,
         "max_price": target.max_price,
-        "collection_name": target.gift_name,
     }
     if target.model:
         params["filter_by_models"] = target.model
@@ -194,10 +205,16 @@ async def _poll_portals(
     headers = {"Authorization": auth_token}
     try:
         resp = await client.get(_PORTALS_URL, params=params, headers=headers, timeout=10)
+        if resp.status_code in (401, 403):
+            logger.warning("Portals auth error %d for %s", resp.status_code, target.gift_name)
+            return []
         resp.raise_for_status()
         data = resp.json()
+    except httpx.HTTPStatusError:
+        logger.warning("Portals HTTP error for %s", target.gift_name, exc_info=True)
+        return []
     except Exception:
-        logger.warning("Portals request failed for %s", target.gift_name, exc_info=True)
+        logger.warning("Portals request failed for %s", target.gift_name)
         return []
 
     listings = []
@@ -290,7 +307,9 @@ async def run_market_monitor(
                 len(current_targets),
                 [t.gift_name for t in current_targets],
             )
-            for target in current_targets:
+            for ti, target in enumerate(current_targets):
+                if ti > 0:
+                    await asyncio.sleep(1.0)
                 all_listings: list[MarketListing] = []
 
                 tasks = []
