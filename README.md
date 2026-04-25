@@ -21,7 +21,7 @@
 ### 1. Клонировать и установить
 
 ```bash
-git clone https://github.com/<your-user>/tg-gift-sniper.git
+git clone https://github.com/v93298402-a11y/tg-gift-sniper.git
 cd tg-gift-sniper
 python -m venv .venv
 source .venv/bin/activate

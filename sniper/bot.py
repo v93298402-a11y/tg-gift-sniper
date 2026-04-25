@@ -44,6 +44,38 @@ _owner_id: int | None = None
 _telethon_client: TelegramClient | None = None
 _targets_file: Path = Path("targets.json")
 _menu_state_file: Path = Path("menu_state.json")
+_bot_state_file: Path = Path("bot_state.json")
+
+
+def _save_bot_state() -> None:
+    """Persist toggles (auto-buy, notifications) so they survive restarts."""
+    try:
+        _bot_state_file.write_text(
+            json.dumps(
+                {
+                    "auto_buy": is_auto_buy(),
+                    "notifications": _notifications_enabled,
+                }
+            )
+        )
+    except Exception:
+        logger.exception("Failed to save bot state")
+
+
+def _load_bot_state() -> None:
+    """Restore toggles from disk; defaults stay if file is missing/corrupt."""
+    global _notifications_enabled
+    if not _bot_state_file.exists():
+        return
+    try:
+        data = json.loads(_bot_state_file.read_text())
+    except Exception:
+        logger.exception("Failed to load bot state")
+        return
+    if "auto_buy" in data:
+        set_auto_buy(bool(data["auto_buy"]))
+    if "notifications" in data:
+        _notifications_enabled = bool(data["notifications"])
 
 
 def _load_last_menu_msg() -> int | None:
@@ -223,10 +255,6 @@ async def cb_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
             "🔍 Введи запрос для поиска (название, модель, фон, паттерн):"
         )
         return None
-    elif query.data == "stats":
-        return await _show_stats_menu(query, context)
-    elif query.data.startswith("stats_"):
-        return await _show_stats_period(query, context)
     elif query.data == "toggle_autobuy":
         return await _toggle_auto_buy(query, context)
     elif query.data == "toggle_notif":
@@ -246,7 +274,6 @@ def _main_menu_kb() -> list[list[InlineKeyboardButton]]:
     return [
         [InlineKeyboardButton("Добавить таргет", callback_data="add_target")],
         [InlineKeyboardButton("Мои таргеты", callback_data="my_targets")],
-        [InlineKeyboardButton("📊 Статистика", callback_data="stats")],
         [
             InlineKeyboardButton(auto_buy_label, callback_data="toggle_autobuy"),
             InlineKeyboardButton(notif_label, callback_data="toggle_notif"),
@@ -256,6 +283,7 @@ def _main_menu_kb() -> list[list[InlineKeyboardButton]]:
 
 async def _toggle_auto_buy(query, context: ContextTypes.DEFAULT_TYPE) -> None:
     set_auto_buy(not is_auto_buy())
+    _save_bot_state()
     status = (
         "ON — бот покупает автоматически (Telegram + MRKT + Portals)"
         if is_auto_buy()
@@ -270,51 +298,13 @@ async def _toggle_auto_buy(query, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def _toggle_notifications(query, context: ContextTypes.DEFAULT_TYPE) -> None:
     global _notifications_enabled
     _notifications_enabled = not _notifications_enabled
+    _save_bot_state()
     status = (
         "ON — уведомления приходят" if _notifications_enabled else "OFF — уведомления отключены"
     )
     await query.edit_message_text(
         f"Уведомления: {status}",
         reply_markup=InlineKeyboardMarkup(_main_menu_kb()),
-    )
-
-
-async def _show_stats_menu(query, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Show stats period selection."""
-    from sniper.stats import get_floor_summary
-
-    floor_text = get_floor_summary()
-    kb = [
-        [
-            InlineKeyboardButton("15 мин", callback_data="stats_15"),
-            InlineKeyboardButton("30 мин", callback_data="stats_30"),
-            InlineKeyboardButton("60 мин", callback_data="stats_60"),
-        ],
-        [InlineKeyboardButton("« Главное меню", callback_data="main_menu")],
-    ]
-    await query.edit_message_text(
-        f"{floor_text}\n\nВыбери период для продаж ниже флора на 30%+:",
-        reply_markup=InlineKeyboardMarkup(kb),
-    )
-
-
-async def _show_stats_period(query, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Show stats for selected period."""
-    from sniper.stats import get_stats_text
-
-    minutes = int(query.data.split("_")[1])
-    text = get_stats_text(minutes=minutes)
-    kb = [
-        [
-            InlineKeyboardButton("15 мин", callback_data="stats_15"),
-            InlineKeyboardButton("30 мин", callback_data="stats_30"),
-            InlineKeyboardButton("60 мин", callback_data="stats_60"),
-        ],
-        [InlineKeyboardButton("« Главное меню", callback_data="main_menu")],
-    ]
-    await query.edit_message_text(
-        text,
-        reply_markup=InlineKeyboardMarkup(kb),
     )
 
 
@@ -1109,7 +1099,7 @@ def build_application(bot_token: str, owner_id: int | None = None) -> Applicatio
         entry_points=[
             CallbackQueryHandler(
                 cb_main_menu,
-                pattern=r"^(add_target|my_targets|search_targets|stats|stats_\d+|toggle_autobuy|toggle_notif|main_menu)$",
+                pattern=r"^(add_target|my_targets|search_targets|toggle_autobuy|toggle_notif|main_menu)$",
             ),
         ],
         states={
@@ -1157,7 +1147,7 @@ def build_application(bot_token: str, owner_id: int | None = None) -> Applicatio
     app.add_handler(
         CallbackQueryHandler(
             cb_main_menu,
-            pattern=r"^(my_targets|search_targets|stats|stats_\d+|toggle_autobuy|toggle_notif|main_menu)$",
+            pattern=r"^(my_targets|search_targets|toggle_autobuy|toggle_notif|main_menu)$",
         )
     )
 
@@ -1181,6 +1171,8 @@ def create_notifier(bot_token: str, chat_id: int):
 def set_telethon_client(client: TelegramClient, cfg: object | None = None) -> None:
     global _telethon_client
     _telethon_client = client
+
+    _load_bot_state()
 
     saved = _load_targets()
     if saved:

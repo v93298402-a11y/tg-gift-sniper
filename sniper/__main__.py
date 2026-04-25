@@ -61,9 +61,6 @@ async def _run(cfg: Config, bot_mode: bool = False, self_mode: bool = False) -> 
     me = await client.get_me()
     logger.info("Logged in as %s (id=%d)", me.first_name, me.id)
 
-    if cfg.dry_run:
-        logger.warning("DRY-RUN mode is ON — no real purchases will be made")
-
     use_dynamic_targets = False
 
     if self_mode:
@@ -97,7 +94,7 @@ async def _run(cfg: Config, bot_mode: bool = False, self_mode: bool = False) -> 
         await app.updater.start_polling()
         logger.info("Bot interface started. Send /start to your bot.")
 
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
 
     def _shutdown() -> None:
         logger.info("Shutting down… stats=%s", get_stats())
@@ -117,6 +114,12 @@ async def _run(cfg: Config, bot_mode: bool = False, self_mode: bool = False) -> 
     if not portals_token:
         logger.info("Auto-fetching Portals auth token…")
         portals_token = await get_portals_token(client)
+
+    async def _refresh_mrkt_token() -> str:
+        return await get_mrkt_token(client)
+
+    async def _refresh_portals_token() -> str:
+        return await get_portals_token(client)
 
     # Build dynamic target getter that merges config + bot targets
     cfg_market_targets = [
@@ -167,6 +170,8 @@ async def _run(cfg: Config, bot_mode: bool = False, self_mode: bool = False) -> 
             mrkt_token=mrkt_token,
             portals_token=portals_token,
             target_fn=_get_market_targets,
+            mrkt_reauth_fn=_refresh_mrkt_token,
+            portals_reauth_fn=_refresh_portals_token,
         )
     )
     logger.info("Market monitor started")
