@@ -43,6 +43,26 @@ _notifications_enabled: bool = True
 _owner_id: int | None = None
 _telethon_client: TelegramClient | None = None
 _targets_file: Path = Path("targets.json")
+_menu_state_file: Path = Path("menu_state.json")
+
+
+def _load_last_menu_msg() -> int | None:
+    """Load the last menu message ID from disk."""
+    if not _menu_state_file.exists():
+        return None
+    try:
+        data = json.loads(_menu_state_file.read_text())
+        return data.get("last_menu_msg")
+    except Exception:
+        return None
+
+
+def _save_last_menu_msg(msg_id: int) -> None:
+    """Persist the last menu message ID."""
+    try:
+        _menu_state_file.write_text(json.dumps({"last_menu_msg": msg_id}))
+    except Exception:
+        pass
 
 
 def _save_targets() -> None:
@@ -160,8 +180,8 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if key.startswith("_"):
             context.user_data.pop(key, None)
 
-    # Delete previous menu message
-    prev_id = context.user_data.get("last_menu_msg")
+    # Delete previous menu message (from file, survives restarts)
+    prev_id = _load_last_menu_msg()
     if prev_id:
         try:
             await update.effective_chat.delete_message(prev_id)
@@ -178,7 +198,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "Снайпер-бот. Выбери действие:",
         reply_markup=InlineKeyboardMarkup(_main_menu_kb()),
     )
-    context.user_data["last_menu_msg"] = msg.message_id
+    _save_last_menu_msg(msg.message_id)
 
 
 async def cmd_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
