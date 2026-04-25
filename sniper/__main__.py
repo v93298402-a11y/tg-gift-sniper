@@ -13,6 +13,8 @@ from telethon import TelegramClient
 
 from sniper.config import DEFAULT_API_HASH, DEFAULT_API_ID, Config
 from sniper.list_gifts import list_gifts, list_models
+from sniper.markets import MarketTarget as MktTarget
+from sniper.markets import run_market_monitor
 from sniper.poller import get_stats, run_loop
 
 logger = logging.getLogger("sniper")
@@ -103,6 +105,42 @@ async def _run(cfg: Config, bot_mode: bool = False, self_mode: bool = False) -> 
 
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, _shutdown)
+
+    if cfg.market_targets:
+        mrkt_token = os.getenv("MRKT_TOKEN", "")
+        portals_token = os.getenv("PORTALS_TOKEN", "")
+
+        mkt_targets = [
+            MktTarget(
+                gift_name=t.gift_name,
+                max_price=t.max_price,
+                model=t.model,
+                pattern=t.pattern,
+                backdrop=t.backdrop,
+                markets=t.markets,
+            )
+            for t in cfg.market_targets
+        ]
+
+        notify_fn = None
+        if bot_mode:
+            from sniper.bot import create_notifier
+
+            notify_fn = create_notifier(bot_token, me.id)
+
+        asyncio.create_task(
+            run_market_monitor(
+                mkt_targets,
+                notify_fn=notify_fn,
+                poll_interval=cfg.poll_interval + 2,
+                mrkt_token=mrkt_token,
+                portals_token=portals_token,
+            )
+        )
+        logger.info(
+            "Market monitor started: %d targets",
+            len(mkt_targets),
+        )
 
     try:
         await run_loop(client, cfg, use_bot_targets=use_dynamic_targets, self_mode=self_mode)

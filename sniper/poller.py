@@ -173,7 +173,8 @@ async def _poll_gift_id(
                 try:
                     currency = "TON" if target.pay_with_ton else "Stars"
                     msg = (
-                        f"🎯 Найден: {target.name} #{gift.num}\n"
+                        f"📍 Telegram Resale\n"
+                        f"🎯 {target.name} #{gift.num}\n"
                         f"Цена: {price} {currency} (макс {target.max_price})\n"
                         f"Slug: {slug}\n"
                         f"Dry-run: {'ON' if cfg.dry_run else 'OFF'}"

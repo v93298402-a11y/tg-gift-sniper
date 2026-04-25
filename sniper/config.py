@@ -31,6 +31,16 @@ class TargetGift:
 
 
 @dataclass
+class MarketTarget:
+    gift_name: str
+    max_price: float
+    model: str | None = None
+    pattern: str | None = None
+    backdrop: str | None = None
+    markets: list[str] = field(default_factory=lambda: ["tonnel", "mrkt", "portals"])
+
+
+@dataclass
 class Config:
     api_id: int
     api_hash: str
@@ -39,6 +49,7 @@ class Config:
     dry_run: bool
     max_spend_per_buy: int
     targets: list[TargetGift]
+    market_targets: list[MarketTarget]
     notify_chat_id: int | None
     log_level: str
     config_path: Path = field(repr=False)
@@ -81,6 +92,20 @@ class Config:
         if not targets:
             logger.warning("No targets defined in config — add via bot or config.yaml")
 
+        market_targets: list[MarketTarget] = []
+        for entry in raw.get("market_targets", []):
+            mkts = entry.get("markets", ["tonnel", "mrkt", "portals"])
+            market_targets.append(
+                MarketTarget(
+                    gift_name=str(entry["gift_name"]),
+                    max_price=float(entry["max_price"]),
+                    model=entry.get("model"),
+                    pattern=entry.get("pattern"),
+                    backdrop=entry.get("backdrop"),
+                    markets=mkts,
+                )
+            )
+
         notify_raw = raw.get("notify_chat_id")
         notify_chat_id = int(notify_raw) if notify_raw else None
 
@@ -92,6 +117,7 @@ class Config:
             dry_run=bool(raw.get("dry_run", True)),
             max_spend_per_buy=int(raw.get("max_spend_per_buy", 5000)),
             targets=targets,
+            market_targets=market_targets,
             notify_chat_id=notify_chat_id,
             log_level=str(raw.get("log_level", "INFO")).upper(),
             config_path=config_path,

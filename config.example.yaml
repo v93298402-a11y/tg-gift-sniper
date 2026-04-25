@@ -35,6 +35,16 @@ targets:
   #   model: "Goldizzle"
   #   pay_with_ton: true
 
+# ─── Third-party marketplace monitoring ────────
+# Monitor Tonnel, MRKT, Portals for underpriced gifts.
+# Notifications only (no auto-buy). Add MRKT_TOKEN / PORTALS_TOKEN to .env.
+# Tonnel needs no auth.
+market_targets: []
+  # - gift_name: "Plush Pepe"
+  #   max_price: 5.0          # TON
+  #   model: "Albino"         # optional
+  #   markets: ["tonnel", "mrkt", "portals"]
+
 # Notification settings (optional).
 # notify_chat_id: Telegram chat/user ID where purchase alerts are sent.
 # Leave empty or remove to disable notifications.
