@@ -240,6 +240,7 @@ async def _show_collections(query, context: ContextTypes.DEFAULT_TYPE, page: int
         return ConversationHandler.END
 
     context.user_data["_collections"] = collections
+    context.user_data["_all_collections"] = collections
     return await _show_collections_page(query, context, page)
 
 
@@ -849,12 +850,20 @@ async def msg_search_picker(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     gift_id = context.user_data.get("gift_id")
 
     if picker == "col":
-        collections = context.user_data.get("_collections", [])
+        collections = context.user_data.get("_all_collections") or context.user_data.get(
+            "_collections", []
+        )
         filtered = [c for c in collections if q.lower() in c["title"].lower()]
         if not filtered:
-            await update.message.reply_text(f'Ничего не найдено по "{q}". Попробуй снова:')
-            context.user_data["_search_picker"] = "col"
-            return SEARCH_PICKER
+            kb = [
+                [InlineKeyboardButton("Все коллекции", callback_data="add_target")],
+                [InlineKeyboardButton("« Меню", callback_data="main_menu")],
+            ]
+            await update.message.reply_text(
+                f'Ничего не найдено по "{q}".',
+                reply_markup=InlineKeyboardMarkup(kb),
+            )
+            return PICK_COLLECTION
         context.user_data["_collections"] = filtered
         buttons = []
         for c in filtered:
@@ -875,15 +884,20 @@ async def msg_search_picker(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         return PICK_COLLECTION
 
     if picker == "mod" and gift_id:
-        context.user_data["_search_model_q"] = q
         attrs = await _fetch_attributes(gift_id)
         title = context.user_data.get("gift_title", "")
         models = attrs.get("models", [])
         filtered = [m for m in models if q.lower() in m["name"].lower()]
         if not filtered:
-            await update.message.reply_text(f'Модель не найдена по "{q}". Попробуй снова:')
-            context.user_data["_search_picker"] = "mod"
-            return SEARCH_PICKER
+            kb = [
+                [InlineKeyboardButton("🔍 Поиск", callback_data='{"a":"search","t":"mod"}')],
+                [InlineKeyboardButton("« Назад", callback_data="back_col")],
+            ]
+            await update.message.reply_text(
+                f'Модель не найдена по "{q}".',
+                reply_markup=InlineKeyboardMarkup(kb),
+            )
+            return PICK_MODEL
         buttons = [
             [
                 InlineKeyboardButton(
@@ -911,15 +925,20 @@ async def msg_search_picker(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         return PICK_MODEL
 
     if picker == "bd" and gift_id:
-        context.user_data["_search_bd_q"] = q
         attrs = await _fetch_attributes(gift_id)
         title = context.user_data.get("gift_title", "")
         backdrops = attrs.get("backdrops", [])
         filtered = [b for b in backdrops if q.lower() in b["name"].lower()]
         if not filtered:
-            await update.message.reply_text(f'Фон не найден по "{q}". Попробуй снова:')
-            context.user_data["_search_picker"] = "bd"
-            return SEARCH_PICKER
+            kb = [
+                [InlineKeyboardButton("🔍 Поиск", callback_data='{"a":"search","t":"bd"}')],
+                [InlineKeyboardButton("« Меню", callback_data="main_menu")],
+            ]
+            await update.message.reply_text(
+                f'Фон не найден по "{q}".',
+                reply_markup=InlineKeyboardMarkup(kb),
+            )
+            return PICK_BACKDROP
         buttons = [
             [
                 InlineKeyboardButton(
@@ -946,15 +965,20 @@ async def msg_search_picker(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         return PICK_BACKDROP
 
     if picker == "pt" and gift_id:
-        context.user_data["_search_pt_q"] = q
         attrs = await _fetch_attributes(gift_id)
         title = context.user_data.get("gift_title", "")
         patterns = attrs.get("patterns", [])
         filtered = [p for p in patterns if q.lower() in p["name"].lower()]
         if not filtered:
-            await update.message.reply_text(f'Паттерн не найден по "{q}". Попробуй снова:')
-            context.user_data["_search_picker"] = "pt"
-            return SEARCH_PICKER
+            kb = [
+                [InlineKeyboardButton("🔍 Поиск", callback_data='{"a":"search","t":"pt"}')],
+                [InlineKeyboardButton("« Меню", callback_data="main_menu")],
+            ]
+            await update.message.reply_text(
+                f'Паттерн не найден по "{q}".',
+                reply_markup=InlineKeyboardMarkup(kb),
+            )
+            return PICK_PATTERN
         buttons = [
             [
                 InlineKeyboardButton(
@@ -1023,6 +1047,7 @@ def build_application(bot_token: str, owner_id: int | None = None) -> Applicatio
             ],
             SEARCH_PICKER: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, msg_search_picker),
+                CallbackQueryHandler(cb_nav, pattern=r"^(main_menu|add_target|back_col)$"),
             ],
         },
         fallbacks=[
