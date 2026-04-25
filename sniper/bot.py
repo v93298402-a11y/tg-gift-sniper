@@ -516,24 +516,18 @@ async def _show_my_targets(query, context: ContextTypes.DEFAULT_TYPE) -> None:
         )
         return
 
-    text = "Активные таргеты:\n\n"
-    num_buttons = []
+    buttons = []
     for i, t in enumerate(_active_targets):
         pay = "TON" if t["pay_with_ton"] else "Stars"
         paused = " ⏸" if t.get("paused") else ""
-        n = i + 1
-        line = f"{n}. {t['name']} — {t['max_price']} {pay}{paused}"
+        label = f"{i + 1}. {t['name']} — {t['max_price']} {pay}{paused}"
         if t.get("model"):
-            line += f" [{t['model']}]"
-        text += line + "\n"
-        num_buttons.append(InlineKeyboardButton(str(n), callback_data=f'{{"a":"select","i":{i}}}'))
+            label += f" [{t['model']}]"
+        buttons.append([InlineKeyboardButton(label, callback_data=f'{{"a":"select","i":{i}}}')])
 
-    buttons = []
-    for row_start in range(0, len(num_buttons), 8):
-        buttons.append(num_buttons[row_start : row_start + 8])
     buttons.append([InlineKeyboardButton("Удалить все", callback_data='{"a":"del_all"}')])
     buttons.append([InlineKeyboardButton("« Главное меню", callback_data="main_menu")])
-    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(buttons))
+    await query.edit_message_text("Активные таргеты:", reply_markup=InlineKeyboardMarkup(buttons))
 
 
 async def cb_target_action(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
