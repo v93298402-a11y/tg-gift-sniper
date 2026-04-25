@@ -49,14 +49,20 @@ def get_stats() -> dict[str, int]:
     return dict(_stats)
 
 
-def _extract_price(gift: types.StarGiftUnique) -> int | None:
-    """Extract the Stars resale price from a StarGiftUnique."""
+def _extract_prices(gift: types.StarGiftUnique) -> dict[str, int]:
+    """Extract resale prices from a StarGiftUnique.
+
+    Returns dict with 'stars' and/or 'ton' keys.
+    """
+    prices: dict[str, int] = {}
     if not gift.resell_amount:
-        return None
+        return prices
     for amt in gift.resell_amount:
         if isinstance(amt, types.StarsAmount):
-            return int(amt.amount)
-    return None
+            prices["stars"] = int(amt.amount)
+        elif isinstance(amt, types.StarsTonAmount):
+            prices["ton"] = int(amt.amount)
+    return prices
 
 
 def _gift_matches_filter(gift: types.StarGiftUnique, target: TargetGift) -> bool:
@@ -138,30 +144,37 @@ async def _poll_gift_id(
 
         _stats["gifts_seen"] += 1
         slug = gift.slug
-        price = _extract_price(gift)
+        prices = _extract_prices(gift)
 
-        if price is None:
-            logger.debug("Skipping gift slug=%s — no Stars price", slug)
+        if not prices:
+            logger.debug("Skipping gift slug=%s — no price", slug)
             continue
 
         if slug in _seen_slugs:
             continue
 
-        if price > cfg.max_spend_per_buy:
-            continue
-
         for target in targets:
+            price_key = "ton" if target.pay_with_ton else "stars"
+            price = prices.get(price_key)
+            if price is None:
+                continue
+
+            if price > cfg.max_spend_per_buy:
+                continue
+
             if price > target.max_price:
                 continue
 
             if not _gift_matches_filter(gift, target):
                 continue
 
+            currency = "TON" if target.pay_with_ton else "Stars"
             logger.info(
-                "HIT: %s #%d — %d Stars (max %d) slug=%s",
+                "HIT: %s #%d — %d %s (max %d) slug=%s",
                 target.name,
                 gift.num,
                 price,
+                currency,
                 target.max_price,
                 slug,
             )
@@ -171,7 +184,6 @@ async def _poll_gift_id(
 
             if _notify_fn:
                 try:
-                    currency = "TON" if target.pay_with_ton else "Stars"
                     msg = (
                         f"📍 Telegram Resale\n"
                         f"🎯 {target.name} #{gift.num}\n"
