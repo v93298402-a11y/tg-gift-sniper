@@ -132,7 +132,7 @@ async def _poll_mrkt(
         "symbolNames": [target.pattern] if target.pattern else [],
         "ordering": "Price",
         "lowToHigh": True,
-        "maxPrice": target.max_price,
+        "maxPrice": int(target.max_price * 1_000_000_000),
         "minPrice": None,
         "mintable": None,
         "number": None,
@@ -158,16 +158,16 @@ async def _poll_mrkt(
         return []
 
     listings = []
-    items = data.get("gifts", data.get("items", []))
-    if isinstance(data, list):
-        items = data
+    items = data.get("gifts", [])
 
     for g in items:
-        price = g.get("price") or g.get("priceTon")
-        if price is None:
+        if not g.get("isOnSale"):
             continue
-        price_f = float(price)
-        if price_f > target.max_price:
+        sale_price = g.get("salePrice")
+        if sale_price is None:
+            continue
+        price_ton = float(sale_price) / 1_000_000_000
+        if price_ton > target.max_price:
             continue
 
         lid = f"mrkt_{g.get('id', g.get('giftId', ''))}"
@@ -175,9 +175,9 @@ async def _poll_mrkt(
             MarketListing(
                 marketplace="MRKT",
                 gift_name=g.get("collectionName", target.gift_name),
-                price=price_f,
+                price=price_ton,
                 currency="TON",
-                model=g.get("modelName"),
+                model=g.get("modelTitle"),
                 pattern=g.get("symbolName"),
                 backdrop=g.get("backdropName"),
                 gift_number=g.get("number"),
