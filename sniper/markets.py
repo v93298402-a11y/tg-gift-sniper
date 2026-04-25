@@ -7,11 +7,19 @@ import logging
 import time
 from collections.abc import Callable, Coroutine
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import httpx
 
 logger = logging.getLogger(__name__)
+
+_MSK = timezone(timedelta(hours=3))
+
+
+def _now_msk() -> str:
+    """Current time in Moscow as HH:MM:SS."""
+    return datetime.now(_MSK).strftime("%H:%M:%S")
 
 
 class _MarketAuthError(Exception):
@@ -528,12 +536,14 @@ async def run_market_monitor(
                         model_info = f"\nМодель: {listing.model}" if listing.model else ""
                         num = f" #{listing.gift_number}" if listing.gift_number else ""
                         link = f"\n🔗 {listing.url}" if listing.url else ""
+                        seen = f"\n🕐 Обнаружено: {_now_msk()} МСК"
                         msg = (
                             f"📍 {listing.marketplace}\n"
                             f"🎯 {listing.gift_name}{num}\n"
                             f"Цена: {listing.price:.4f} {listing.currency} "
                             f"(макс {target.max_price})"
                             f"{model_info}"
+                            f"{seen}"
                             f"{link}"
                             f"{buy_result}"
                         )

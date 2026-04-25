@@ -7,6 +7,7 @@ import logging
 import time
 from collections import defaultdict
 from collections.abc import Callable, Coroutine
+from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
 
 from telethon import functions, types
@@ -21,6 +22,13 @@ if TYPE_CHECKING:
     from telethon import TelegramClient
 
 logger = logging.getLogger(__name__)
+
+_MSK = timezone(timedelta(hours=3))
+
+
+def _now_msk() -> str:
+    """Current time in Moscow as HH:MM:SS."""
+    return datetime.now(_MSK).strftime("%H:%M:%S")
 
 # Keep track of slugs we already attempted to buy (avoid double-buying)
 _seen_slugs: set[str] = set()
@@ -213,6 +221,7 @@ async def _poll_gift_id(
                 try:
                     tg_link = f"https://t.me/nft/{slug}" if slug else ""
                     link_line = f"\n🔗 {tg_link}" if tg_link else ""
+                    seen_line = f"\n🕐 Обнаружено: {_now_msk()} МСК"
                     if auto_buy_on:
                         buy_result = "\n✅ Куплено!" if ok else "\n❌ Покупка не удалась"
                     else:
@@ -221,6 +230,7 @@ async def _poll_gift_id(
                         f"📍 Telegram Resale\n"
                         f"🎯 {target.name} #{gift.num}\n"
                         f"Цена: {price_fmt} {currency} (макс {target.max_price})"
+                        f"{seen_line}"
                         f"{buy_result}"
                         f"{link_line}"
                     )
