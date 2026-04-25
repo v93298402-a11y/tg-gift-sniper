@@ -516,8 +516,8 @@ async def _show_my_targets(query, context: ContextTypes.DEFAULT_TYPE) -> None:
         )
         return
 
-    text = "Активные таргеты:\n\n"
-    num_buttons = []
+    text = "Активные таргеты:\n"
+    buttons = []
     for i, t in enumerate(_active_targets):
         pay = "TON" if t["pay_with_ton"] else "Stars"
         paused = " ⏸" if t.get("paused") else ""
@@ -525,13 +525,18 @@ async def _show_my_targets(query, context: ContextTypes.DEFAULT_TYPE) -> None:
         line = f"{n}. {t['name']} — {t['max_price']} {pay}{paused}"
         if t.get("model"):
             line += f" [{t['model']}]"
-        text += line + "\n"
-        num_buttons.append(InlineKeyboardButton(str(n), callback_data=f'{{"a":"select","i":{i}}}'))
+        text += f"\n{line}"
+        buttons.append(
+            [
+                InlineKeyboardButton(f"#{n} ✏️", callback_data=f'{{"a":"edit","i":{i}}}'),
+                InlineKeyboardButton(
+                    f"#{n} ▶️" if t.get("paused") else f"#{n} ⏸",
+                    callback_data=f'{{"a":"pause","i":{i}}}',
+                ),
+                InlineKeyboardButton(f"#{n} 🗑", callback_data=f'{{"a":"del","i":{i}}}'),
+            ]
+        )
 
-    text += "\nНажми номер для действий:"
-    buttons = []
-    for row_start in range(0, len(num_buttons), 5):
-        buttons.append(num_buttons[row_start : row_start + 5])
     buttons.append([InlineKeyboardButton("Удалить все", callback_data='{"a":"del_all"}')])
     buttons.append([InlineKeyboardButton("« Главное меню", callback_data="main_menu")])
     await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(buttons))
