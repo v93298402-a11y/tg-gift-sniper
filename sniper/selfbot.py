@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import logging
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from telethon import events, functions, types
@@ -16,9 +18,27 @@ logger = logging.getLogger(__name__)
 _active_targets: list[dict] = []
 _dry_run: bool = True
 _client: TelegramClient | None = None
+_targets_file: Path = Path("targets.json")
 
 # Conversation state per user (simple state machine)
 _conv_state: dict | None = None
+
+
+def _save_targets() -> None:
+    try:
+        _targets_file.write_text(json.dumps(_active_targets, ensure_ascii=False, indent=2))
+    except Exception:
+        logger.exception("Failed to save targets")
+
+
+def _load_targets() -> list[dict]:
+    if not _targets_file.exists():
+        return []
+    try:
+        return json.loads(_targets_file.read_text())
+    except Exception:
+        logger.exception("Failed to load targets")
+        return []
 
 
 def get_active_targets() -> list[dict]:
@@ -263,6 +283,7 @@ async def _handle_conv(text: str) -> None:
                 }
             )
 
+        _save_targets()
         payment_label = {1: "Stars", 2: "TON", 3: "Stars + TON"}
         summary = f"Таргет добавлен!\n\nКоллекция: {gift_title}"
         if model:
@@ -340,20 +361,30 @@ def register_handlers(client: TelegramClient, cfg: object | None = None) -> None
     global _client, _dry_run
     _client = client
 
+    saved = _load_targets()
+    if saved:
+        _active_targets.extend(saved)
+        logger.info("Loaded %d targets from %s", len(saved), _targets_file)
+
     if cfg is not None:
         _dry_run = cfg.dry_run
+        cfg_ids = {
+            (t["gift_id"], t.get("pay_with_ton", False), t.get("model")) for t in _active_targets
+        }
         for t in cfg.targets:
-            _active_targets.append(
-                {
-                    "gift_id": t.gift_id,
-                    "max_price": t.max_price,
-                    "name": t.name,
-                    "pay_with_ton": t.pay_with_ton,
-                    "model": t.model,
-                    "pattern": t.pattern,
-                    "backdrop": t.backdrop,
-                }
-            )
+            key = (t.gift_id, t.pay_with_ton, t.model)
+            if key not in cfg_ids:
+                _active_targets.append(
+                    {
+                        "gift_id": t.gift_id,
+                        "max_price": t.max_price,
+                        "name": t.name,
+                        "pay_with_ton": t.pay_with_ton,
+                        "model": t.model,
+                        "pattern": t.pattern,
+                        "backdrop": t.backdrop,
+                    }
+                )
 
     @client.on(events.NewMessage(outgoing=True, chats="me"))
     async def on_saved_message(event: events.NewMessage.Event) -> None:
@@ -397,6 +428,7 @@ def register_handlers(client: TelegramClient, cfg: object | None = None) -> None
                 idx = int(text.split()[1]) - 1
                 if 0 <= idx < len(_active_targets):
                     removed = _active_targets.pop(idx)
+                    _save_targets()
                     await _send(f"Удалён: {removed['name']}\nОсталось: {len(_active_targets)}")
                 else:
                     await _send(f"Неверный номер. Доступно: 1-{len(_active_targets)}")
@@ -408,6 +440,7 @@ def register_handlers(client: TelegramClient, cfg: object | None = None) -> None
             _conv_state = None
             count = len(_active_targets)
             _active_targets.clear()
+            _save_targets()
             await _send(f"Удалено {count} таргетов.")
             return
 

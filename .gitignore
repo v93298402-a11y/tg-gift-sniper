@@ -10,6 +10,7 @@ build/
 .env
 *.session
 *.session-journal
+targets.json
 
 .venv/
 venv/

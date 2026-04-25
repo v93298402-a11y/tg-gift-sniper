@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
@@ -31,6 +32,26 @@ _active_targets: list[dict] = []
 _dry_run: bool = True
 _owner_id: int | None = None
 _telethon_client: TelegramClient | None = None
+_targets_file: Path = Path("targets.json")
+
+
+def _save_targets() -> None:
+    """Persist active targets to disk."""
+    try:
+        _targets_file.write_text(json.dumps(_active_targets, ensure_ascii=False, indent=2))
+    except Exception:
+        logger.exception("Failed to save targets")
+
+
+def _load_targets() -> list[dict]:
+    """Load persisted targets from disk."""
+    if not _targets_file.exists():
+        return []
+    try:
+        return json.loads(_targets_file.read_text())
+    except Exception:
+        logger.exception("Failed to load targets")
+        return []
 
 
 def get_active_targets() -> list[dict]:
@@ -443,6 +464,7 @@ async def cb_set_payment(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     for t in targets_to_add:
         _active_targets.append(t)
+    _save_targets()
 
     summary = f"Таргет добавлен!\n\nКоллекция: {gift_title}"
     if model:
@@ -501,12 +523,14 @@ async def cb_delete_target(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     data = json.loads(query.data)
     if data["a"] == "del_all":
         _active_targets.clear()
+        _save_targets()
         await query.edit_message_text("Все таргеты удалены.")
         return
     if data["a"] == "del":
         idx = data["i"]
         if 0 <= idx < len(_active_targets):
             removed = _active_targets.pop(idx)
+            _save_targets()
             await query.edit_message_text(f"Удалён: {removed['name']}")
         return
 
@@ -599,17 +623,28 @@ def create_notifier(bot_token: str, chat_id: int):
 def set_telethon_client(client: TelegramClient, cfg: object | None = None) -> None:
     global _telethon_client, _dry_run
     _telethon_client = client
+
+    saved = _load_targets()
+    if saved:
+        _active_targets.extend(saved)
+        logger.info("Loaded %d targets from %s", len(saved), _targets_file)
+
     if cfg is not None:
         _dry_run = cfg.dry_run
+        cfg_ids = {
+            (t["gift_id"], t.get("pay_with_ton", False), t.get("model")) for t in _active_targets
+        }
         for t in cfg.targets:
-            _active_targets.append(
-                {
-                    "gift_id": t.gift_id,
-                    "max_price": t.max_price,
-                    "name": t.name,
-                    "pay_with_ton": t.pay_with_ton,
-                    "model": t.model,
-                    "pattern": t.pattern,
-                    "backdrop": t.backdrop,
-                }
-            )
+            key = (t.gift_id, t.pay_with_ton, t.model)
+            if key not in cfg_ids:
+                _active_targets.append(
+                    {
+                        "gift_id": t.gift_id,
+                        "max_price": t.max_price,
+                        "name": t.name,
+                        "pay_with_ton": t.pay_with_ton,
+                        "model": t.model,
+                        "pattern": t.pattern,
+                        "backdrop": t.backdrop,
+                    }
+                )
