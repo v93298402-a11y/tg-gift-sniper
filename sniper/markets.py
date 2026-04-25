@@ -246,17 +246,18 @@ async def _poll_portals(
 
 
 async def run_market_monitor(
-    targets: list[MarketTarget],
-    notify_fn: Callable[[str], Coroutine[Any, Any, None]] | None,
+    targets: list[MarketTarget] | None = None,
+    notify_fn: Callable[[str], Coroutine[Any, Any, None]] | None = None,
     poll_interval: float = 5.0,
     mrkt_token: str = "",
     portals_token: str = "",
+    target_fn: Callable[[], list[MarketTarget]] | None = None,
 ) -> None:
-    """Continuously poll third-party marketplaces and send notifications."""
-    if not targets:
-        logger.info("No market targets configured, monitor disabled")
-        return
+    """Continuously poll third-party marketplaces and send notifications.
 
+    Either pass static `targets` or a dynamic `target_fn` that returns
+    the current list on each cycle.
+    """
     active_markets = set()
     active_markets.add("tonnel")
     if mrkt_token:
@@ -265,8 +266,7 @@ async def run_market_monitor(
         active_markets.add("portals")
 
     logger.info(
-        "Market monitor started: %d targets, markets=%s, interval=%.1fs",
-        len(targets),
+        "Market monitor started: markets=%s, interval=%.1fs",
         active_markets,
         poll_interval,
     )
@@ -275,7 +275,8 @@ async def run_market_monitor(
         while True:
             t0 = time.monotonic()
 
-            for target in targets:
+            current_targets = target_fn() if target_fn else (targets or [])
+            for target in current_targets:
                 all_listings: list[MarketListing] = []
 
                 tasks = []

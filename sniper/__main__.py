@@ -107,51 +107,69 @@ async def _run(cfg: Config, bot_mode: bool = False, self_mode: bool = False) -> 
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, _shutdown)
 
-    if cfg.market_targets:
-        mrkt_token = os.getenv("MRKT_TOKEN", "")
-        portals_token = os.getenv("PORTALS_TOKEN", "")
+    # Auto-fetch marketplace tokens
+    mrkt_token = os.getenv("MRKT_TOKEN", "")
+    portals_token = os.getenv("PORTALS_TOKEN", "")
 
-        needs_mrkt = any("mrkt" in t.markets for t in cfg.market_targets)
-        needs_portals = any("portals" in t.markets for t in cfg.market_targets)
+    if not mrkt_token:
+        logger.info("Auto-fetching MRKT auth token…")
+        mrkt_token = await get_mrkt_token(client)
+    if not portals_token:
+        logger.info("Auto-fetching Portals auth token…")
+        portals_token = await get_portals_token(client)
 
-        if not mrkt_token and needs_mrkt:
-            logger.info("Auto-fetching MRKT auth token…")
-            mrkt_token = await get_mrkt_token(client)
-        if not portals_token and needs_portals:
-            logger.info("Auto-fetching Portals auth token…")
-            portals_token = await get_portals_token(client)
-
-        mkt_targets = [
-            MktTarget(
-                gift_name=t.gift_name,
-                max_price=t.max_price,
-                model=t.model,
-                pattern=t.pattern,
-                backdrop=t.backdrop,
-                markets=t.markets,
-            )
-            for t in cfg.market_targets
-        ]
-
-        notify_fn = None
-        if bot_mode:
-            from sniper.bot import create_notifier
-
-            notify_fn = create_notifier(bot_token, me.id)
-
-        asyncio.create_task(
-            run_market_monitor(
-                mkt_targets,
-                notify_fn=notify_fn,
-                poll_interval=cfg.poll_interval + 2,
-                mrkt_token=mrkt_token,
-                portals_token=portals_token,
-            )
+    # Build dynamic target getter that merges config + bot targets
+    cfg_market_targets = [
+        MktTarget(
+            gift_name=t.gift_name,
+            max_price=t.max_price,
+            model=t.model,
+            pattern=t.pattern,
+            backdrop=t.backdrop,
+            markets=t.markets,
         )
-        logger.info(
-            "Market monitor started: %d targets",
-            len(mkt_targets),
+        for t in cfg.market_targets
+    ]
+
+    def _get_market_targets() -> list[MktTarget]:
+        targets = list(cfg_market_targets)
+        if bot_mode or self_mode:
+            if bot_mode:
+                from sniper.bot import get_market_targets as bot_mkt
+            else:
+                from sniper.selfbot import get_market_targets as bot_mkt
+            for t in bot_mkt():
+                # Strip " (Stars)" / " (TON)" suffix from name
+                name = t.get("name", "")
+                for suffix in (" (Stars)", " (TON)"):
+                    name = name.replace(suffix, "")
+                targets.append(
+                    MktTarget(
+                        gift_name=name,
+                        max_price=float(t["market_max_price"]),
+                        model=t.get("model"),
+                        pattern=t.get("pattern"),
+                        backdrop=t.get("backdrop"),
+                    )
+                )
+        return targets
+
+    market_notify_fn = None
+    if bot_mode:
+        from sniper.bot import create_notifier
+
+        market_notify_fn = create_notifier(bot_token, me.id)
+
+    asyncio.create_task(
+        run_market_monitor(
+            notify_fn=market_notify_fn,
+            poll_interval=cfg.poll_interval + 2,
+            mrkt_token=mrkt_token,
+            portals_token=portals_token,
+            target_fn=_get_market_targets,
         )
+    )
+    logger.info("Market monitor started")
 
     try:
         await run_loop(client, cfg, use_bot_targets=use_dynamic_targets, self_mode=self_mode)

@@ -25,7 +25,15 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # Conversation states
-PICK_COLLECTION, PICK_MODEL, PICK_BACKDROP, PICK_PATTERN, SET_PRICE, SET_PAYMENT = range(6)
+(
+    PICK_COLLECTION,
+    PICK_MODEL,
+    PICK_BACKDROP,
+    PICK_PATTERN,
+    SET_PRICE,
+    SET_PAYMENT,
+    SET_MARKET_PRICE,
+) = range(7)
 
 # Runtime state shared with sniper engine
 _active_targets: list[dict] = []
@@ -56,6 +64,13 @@ def _load_targets() -> list[dict]:
 
 def get_active_targets() -> list[dict]:
     return list(_active_targets)
+
+
+def get_market_targets() -> list[dict]:
+    """Return targets that have marketplace monitoring enabled."""
+    return [
+        t for t in _active_targets if t.get("market_max_price") and t.get("market_max_price") > 0
+    ]
 
 
 def is_dry_run() -> bool:
@@ -462,9 +477,36 @@ async def cb_set_payment(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             }
         )
 
+    context.user_data["_pending_targets"] = targets_to_add
+
+    await query.edit_message_text(
+        "Макс. цена на маркетах (Tonnel/MRKT/Portals) в TON?\n"
+        "Если не нужно мониторить маркеты — отправь 0",
+    )
+    return SET_MARKET_PRICE
+
+
+async def msg_set_market_price(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    text = update.message.text.strip()
+    try:
+        market_price = float(text)
+        if market_price < 0:
+            raise ValueError
+    except ValueError:
+        await update.message.reply_text("Введи число (0 чтобы пропустить):")
+        return SET_MARKET_PRICE
+
+    targets_to_add = context.user_data.get("_pending_targets", [])
     for t in targets_to_add:
+        t["market_max_price"] = market_price if market_price > 0 else None
         _active_targets.append(t)
     _save_targets()
+
+    gift_title = context.user_data.get("gift_title", "?")
+    model = context.user_data.get("model")
+    backdrop = context.user_data.get("backdrop")
+    pattern = context.user_data.get("pattern")
+    max_price = context.user_data.get("max_price", 0)
 
     summary = f"Таргет добавлен!\n\nКоллекция: {gift_title}"
     if model:
@@ -473,9 +515,11 @@ async def cb_set_payment(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         summary += f"\nФон: {backdrop}"
     if pattern:
         summary += f"\nПаттерн: {pattern}"
-    summary += f"\nМакс. цена: {max_price}"
-    payment_label = {"stars": "Stars", "ton": "TON", "both": "Stars + TON"}
-    summary += f"\nОплата: {payment_label[method]}"
+    summary += f"\nМакс. цена (Telegram): {max_price}"
+    if market_price > 0:
+        summary += f"\nМакс. цена (маркеты): {market_price} TON"
+    else:
+        summary += "\nМаркеты: выключены"
     summary += f"\nDry-run: {'ON' if _dry_run else 'OFF'}"
     summary += f"\n\nВсего активных таргетов: {len(_active_targets)}"
 
@@ -484,7 +528,7 @@ async def cb_set_payment(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         [InlineKeyboardButton("Мои таргеты", callback_data="my_targets")],
         [InlineKeyboardButton("« Главное меню", callback_data="main_menu")],
     ]
-    await query.edit_message_text(summary, reply_markup=InlineKeyboardMarkup(kb))
+    await update.message.reply_text(summary, reply_markup=InlineKeyboardMarkup(kb))
     return ConversationHandler.END
 
 
@@ -589,6 +633,9 @@ def build_application(bot_token: str, owner_id: int | None = None) -> Applicatio
             SET_PAYMENT: [
                 CallbackQueryHandler(cb_set_payment, pattern=r'^\{.*"a":"pay"'),
                 CallbackQueryHandler(cb_nav, pattern=r"^(main_menu)$"),
+            ],
+            SET_MARKET_PRICE: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, msg_set_market_price),
             ],
         },
         fallbacks=[
