@@ -229,19 +229,20 @@ async def run_loop(
         t0 = time.monotonic()
 
         # Merge config targets with dynamic targets
-        all_targets = list(cfg.targets)
         if self_mode:
             from sniper.selfbot import get_active_targets as self_targets
             from sniper.selfbot import is_dry_run as self_dry_run
 
-            all_targets.extend(_bot_targets_to_config(self_targets()))
+            all_targets = _bot_targets_to_config(self_targets())
             cfg.dry_run = self_dry_run()
         elif use_bot_targets:
             from sniper.bot import get_active_targets, is_dry_run
 
-            bot_targets = _bot_targets_to_config(get_active_targets())
-            all_targets.extend(bot_targets)
+            all_targets = list(cfg.targets)
+            all_targets.extend(_bot_targets_to_config(get_active_targets()))
             cfg.dry_run = is_dry_run()
+        else:
+            all_targets = list(cfg.targets)
 
         # Group targets by gift_id → one API call per collection
         by_gift: dict[int, list[TargetGift]] = defaultdict(list)

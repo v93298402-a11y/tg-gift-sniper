@@ -335,10 +335,25 @@ async def _ask_price_step() -> None:
     await _send(summary)
 
 
-def register_handlers(client: TelegramClient) -> None:
+def register_handlers(client: TelegramClient, cfg: object | None = None) -> None:
     """Register event handlers on the Telethon client for Saved Messages commands."""
-    global _client
+    global _client, _dry_run
     _client = client
+
+    if cfg is not None:
+        _dry_run = cfg.dry_run
+        for t in cfg.targets:
+            _active_targets.append(
+                {
+                    "gift_id": t.gift_id,
+                    "max_price": t.max_price,
+                    "name": t.name,
+                    "pay_with_ton": t.pay_with_ton,
+                    "model": t.model,
+                    "pattern": t.pattern,
+                    "backdrop": t.backdrop,
+                }
+            )
 
     @client.on(events.NewMessage(outgoing=True, chats="me"))
     async def on_saved_message(event: events.NewMessage.Event) -> None:

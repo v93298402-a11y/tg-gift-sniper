@@ -66,7 +66,7 @@ async def _run(cfg: Config, bot_mode: bool = False, self_mode: bool = False) -> 
     if self_mode:
         from sniper.selfbot import register_handlers
 
-        register_handlers(client)
+        register_handlers(client, cfg)
         use_dynamic_targets = True
         logger.info("Saved Messages interface enabled. Send /menu to Saved Messages.")
 
