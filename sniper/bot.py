@@ -159,10 +159,26 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     for key in list(context.user_data.keys()):
         if key.startswith("_"):
             context.user_data.pop(key, None)
-    await update.message.reply_text(
+
+    # Delete previous menu message
+    prev_id = context.user_data.get("last_menu_msg")
+    if prev_id:
+        try:
+            await update.effective_chat.delete_message(prev_id)
+        except Exception:
+            pass
+
+    # Delete the /start command message itself
+    try:
+        await update.message.delete()
+    except Exception:
+        pass
+
+    msg = await update.effective_chat.send_message(
         "Снайпер-бот. Выбери действие:",
         reply_markup=InlineKeyboardMarkup(_main_menu_kb()),
     )
+    context.user_data["last_menu_msg"] = msg.message_id
 
 
 async def cmd_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
