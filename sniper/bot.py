@@ -171,16 +171,31 @@ async def _toggle_dry_run(query, context: ContextTypes.DEFAULT_TYPE) -> None:
     await query.edit_message_text(f"Dry-run {status}", reply_markup=InlineKeyboardMarkup(kb))
 
 
-async def _show_collections(query, context: ContextTypes.DEFAULT_TYPE) -> int:
-    await query.edit_message_text("Загружаю коллекции...")
+_COLLECTIONS_PAGE_SIZE = 20
+
+
+async def _show_collections(query, context: ContextTypes.DEFAULT_TYPE, page: int = 0) -> int:
+    if page == 0:
+        await query.edit_message_text("Загружаю коллекции...")
     collections = await _fetch_collections()
 
     if not collections:
         await query.edit_message_text("Нет коллекций на ресейле.")
         return ConversationHandler.END
 
+    context.user_data["_collections"] = collections
+    return await _show_collections_page(query, context, page)
+
+
+async def _show_collections_page(query, context, page: int) -> int:
+    collections = context.user_data.get("_collections", [])
+    total = len(collections)
+    start = page * _COLLECTIONS_PAGE_SIZE
+    end = start + _COLLECTIONS_PAGE_SIZE
+    page_items = collections[start:end]
+
     buttons = []
-    for c in collections:
+    for c in page_items:
         label = f"{c['title']} ({c['resale_count']} шт)"
         data = json.dumps({"a": "col", "id": c["id"], "t": c["title"]})
         if len(data) <= 64:
@@ -190,8 +205,20 @@ async def _show_collections(query, context: ContextTypes.DEFAULT_TYPE) -> int:
             context.user_data[f"title_{c['id']}"] = c["title"]
             buttons.append([InlineKeyboardButton(label, callback_data=short)])
 
-    buttons.append([InlineKeyboardButton("« Назад", callback_data="main_menu")])
-    await query.edit_message_text("Выбери коллекцию:", reply_markup=InlineKeyboardMarkup(buttons))
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton("« Назад", callback_data=f'{{"a":"pg","p":{page - 1}}}'))
+    if end < total:
+        nav.append(InlineKeyboardButton("Далее »", callback_data=f'{{"a":"pg","p":{page + 1}}}'))
+    if nav:
+        buttons.append(nav)
+    buttons.append([InlineKeyboardButton("« Меню", callback_data="main_menu")])
+
+    total_pages = (total + _COLLECTIONS_PAGE_SIZE - 1) // _COLLECTIONS_PAGE_SIZE
+    await query.edit_message_text(
+        f"Выбери коллекцию ({page + 1}/{total_pages}):",
+        reply_markup=InlineKeyboardMarkup(buttons),
+    )
     return PICK_COLLECTION
 
 
@@ -204,6 +231,10 @@ async def cb_pick_collection(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return ConversationHandler.END
 
     data = json.loads(query.data)
+
+    if data.get("a") == "pg":
+        return await _show_collections_page(query, context, data["p"])
+
     gift_id = data["id"]
     title = data.get("t") or context.user_data.get(f"title_{gift_id}", f"gift-{gift_id}")
 
