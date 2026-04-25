@@ -27,7 +27,15 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # Conversation states
-PICK_COLLECTION, PICK_MODEL, PICK_BACKDROP, PICK_PATTERN, SET_PRICE, SET_PAYMENT = range(6)
+(
+    PICK_COLLECTION,
+    PICK_MODEL,
+    PICK_BACKDROP,
+    PICK_PATTERN,
+    SET_PRICE,
+    SET_PAYMENT,
+    SEARCH_PICKER,
+) = range(7)
 
 # Runtime state shared with sniper engine
 _active_targets: list[dict] = []
@@ -260,6 +268,7 @@ async def _show_collections_page(query, context, page: int) -> int:
         nav.append(InlineKeyboardButton("Далее »", callback_data=f'{{"a":"pg","p":{page + 1}}}'))
     if nav:
         buttons.append(nav)
+    buttons.append([InlineKeyboardButton("🔍 Поиск", callback_data='{"a":"search","t":"col"}')])
     buttons.append([InlineKeyboardButton("« Меню", callback_data="main_menu")])
 
     total_pages = (total + _COLLECTIONS_PAGE_SIZE - 1) // _COLLECTIONS_PAGE_SIZE
@@ -283,6 +292,11 @@ async def cb_pick_collection(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if data.get("a") == "pg":
         return await _show_collections_page(query, context, data["p"])
 
+    if data.get("a") == "search":
+        context.user_data["_search_picker"] = data["t"]
+        await query.edit_message_text("🔍 Введи название коллекции для поиска:")
+        return SEARCH_PICKER
+
     gift_id = data["id"]
     title = data.get("t") or context.user_data.get(f"title_{gift_id}", f"gift-{gift_id}")
 
@@ -297,15 +311,23 @@ async def cb_pick_collection(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     models = attrs.get("models", [])
     if models:
+        context.user_data["_models"] = models
+        search_q = context.user_data.pop("_search_model_q", "")
         buttons = [
             [InlineKeyboardButton("Пропустить (любая модель)", callback_data='{"a":"mod","n":""}')],
         ]
         for m in models:
+            if search_q and search_q.lower() not in m["name"].lower():
+                continue
             cb_data = json.dumps({"a": "mod", "n": m["name"]})
             buttons.append([InlineKeyboardButton(m["name"], callback_data=cb_data)])
+        buttons.append([InlineKeyboardButton("🔍 Поиск", callback_data='{"a":"search","t":"mod"}')])
         buttons.append([InlineKeyboardButton("« Назад", callback_data="back_col")])
+        header = f"Коллекция: {title}\nВыбери модель:"
+        if search_q:
+            header = f'Коллекция: {title}\n🔍 "{search_q}":'
         await query.edit_message_text(
-            f"Коллекция: {title}\nВыбери модель:",
+            header,
             reply_markup=InlineKeyboardMarkup(buttons),
         )
         return PICK_MODEL
@@ -321,6 +343,12 @@ async def cb_pick_model(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         return await _show_collections(query, context)
 
     data = json.loads(query.data)
+
+    if data.get("a") == "search":
+        context.user_data["_search_picker"] = data["t"]
+        await query.edit_message_text("🔍 Введи название модели для поиска:")
+        return SEARCH_PICKER
+
     model_name = data["n"] or None
     context.user_data["model"] = model_name
 
@@ -334,15 +362,23 @@ async def _ask_backdrop(query, context, attrs: dict) -> int:
     title = context.user_data["gift_title"]
 
     if backdrops:
+        context.user_data["_backdrops"] = backdrops
+        search_q = context.user_data.pop("_search_bd_q", "")
         buttons = [
             [InlineKeyboardButton("Пропустить (любой фон)", callback_data='{"a":"bd","n":""}')],
         ]
         for b in backdrops:
+            if search_q and search_q.lower() not in b["name"].lower():
+                continue
             cb_data = json.dumps({"a": "bd", "n": b["name"]})
             buttons.append([InlineKeyboardButton(b["name"], callback_data=cb_data)])
+        buttons.append([InlineKeyboardButton("🔍 Поиск", callback_data='{"a":"search","t":"bd"}')])
         model_info = f"\nМодель: {context.user_data['model']}" if context.user_data["model"] else ""
+        header = f"Коллекция: {title}{model_info}\nВыбери фон:"
+        if search_q:
+            header = f'Коллекция: {title}{model_info}\n🔍 "{search_q}":'
         await query.edit_message_text(
-            f"Коллекция: {title}{model_info}\nВыбери фон:",
+            header,
             reply_markup=InlineKeyboardMarkup(buttons),
         )
         return PICK_BACKDROP
@@ -355,6 +391,12 @@ async def cb_pick_backdrop(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     await query.answer()
 
     data = json.loads(query.data)
+
+    if data.get("a") == "search":
+        context.user_data["_search_picker"] = data["t"]
+        await query.edit_message_text("🔍 Введи название фона для поиска:")
+        return SEARCH_PICKER
+
     backdrop_name = data["n"] or None
     context.user_data["backdrop"] = backdrop_name
 
@@ -368,16 +410,24 @@ async def _ask_pattern(query, context, attrs: dict) -> int:
     title = context.user_data["gift_title"]
 
     if patterns:
+        context.user_data["_patterns"] = patterns
+        search_q = context.user_data.pop("_search_pt_q", "")
         buttons = [
             [InlineKeyboardButton("Пропустить (любой паттерн)", callback_data='{"a":"pt","n":""}')],
         ]
         for p in patterns:
+            if search_q and search_q.lower() not in p["name"].lower():
+                continue
             cb_data = json.dumps({"a": "pt", "n": p["name"]})
             buttons.append([InlineKeyboardButton(p["name"], callback_data=cb_data)])
+        buttons.append([InlineKeyboardButton("🔍 Поиск", callback_data='{"a":"search","t":"pt"}')])
         model_info = f"\nМодель: {context.user_data['model']}" if context.user_data["model"] else ""
         bd_info = f"\nФон: {context.user_data['backdrop']}" if context.user_data["backdrop"] else ""
+        header = f"Коллекция: {title}{model_info}{bd_info}\nВыбери паттерн:"
+        if search_q:
+            header = f'Коллекция: {title}{model_info}{bd_info}\n🔍 "{search_q}":'
         await query.edit_message_text(
-            f"Коллекция: {title}{model_info}{bd_info}\nВыбери паттерн:",
+            header,
             reply_markup=InlineKeyboardMarkup(buttons),
         )
         return PICK_PATTERN
@@ -390,6 +440,12 @@ async def cb_pick_pattern(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     await query.answer()
 
     data = json.loads(query.data)
+
+    if data.get("a") == "search":
+        context.user_data["_search_picker"] = data["t"]
+        await query.edit_message_text("🔍 Введи название паттерна для поиска:")
+        return SEARCH_PICKER
+
     pattern_name = data["n"] or None
     context.user_data["pattern"] = pattern_name
 
@@ -786,6 +842,147 @@ async def cb_nav(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     return ConversationHandler.END
 
 
+async def msg_search_picker(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Handle search text input during target creation pickers."""
+    picker = context.user_data.pop("_search_picker", None)
+    q = update.message.text.strip()
+    gift_id = context.user_data.get("gift_id")
+
+    if picker == "col":
+        collections = context.user_data.get("_collections", [])
+        filtered = [c for c in collections if q.lower() in c["title"].lower()]
+        if not filtered:
+            await update.message.reply_text(f'Ничего не найдено по "{q}". Попробуй снова:')
+            context.user_data["_search_picker"] = "col"
+            return SEARCH_PICKER
+        context.user_data["_collections"] = filtered
+        buttons = []
+        for c in filtered:
+            label = f"{c['title']} ({c['resale_count']} шт)"
+            data = json.dumps({"a": "col", "id": c["id"], "t": c["title"]})
+            if len(data) <= 64:
+                buttons.append([InlineKeyboardButton(label, callback_data=data)])
+            else:
+                short = json.dumps({"a": "col", "id": c["id"]})
+                context.user_data[f"title_{c['id']}"] = c["title"]
+                buttons.append([InlineKeyboardButton(label, callback_data=short)])
+        buttons.append([InlineKeyboardButton("Все коллекции", callback_data="add_target")])
+        buttons.append([InlineKeyboardButton("« Меню", callback_data="main_menu")])
+        await update.message.reply_text(
+            f'🔍 "{q}" ({len(filtered)}):',
+            reply_markup=InlineKeyboardMarkup(buttons),
+        )
+        return PICK_COLLECTION
+
+    if picker == "mod" and gift_id:
+        context.user_data["_search_model_q"] = q
+        attrs = await _fetch_attributes(gift_id)
+        title = context.user_data.get("gift_title", "")
+        models = attrs.get("models", [])
+        filtered = [m for m in models if q.lower() in m["name"].lower()]
+        if not filtered:
+            await update.message.reply_text(f'Модель не найдена по "{q}". Попробуй снова:')
+            context.user_data["_search_picker"] = "mod"
+            return SEARCH_PICKER
+        buttons = [
+            [
+                InlineKeyboardButton(
+                    "Пропустить (любая модель)",
+                    callback_data='{"a":"mod","n":""}',
+                )
+            ],
+        ]
+        for m in filtered:
+            cb_data = json.dumps({"a": "mod", "n": m["name"]})
+            buttons.append([InlineKeyboardButton(m["name"], callback_data=cb_data)])
+        buttons.append(
+            [
+                InlineKeyboardButton(
+                    "🔍 Поиск",
+                    callback_data='{"a":"search","t":"mod"}',
+                )
+            ]
+        )
+        buttons.append([InlineKeyboardButton("« Назад", callback_data="back_col")])
+        await update.message.reply_text(
+            f'Коллекция: {title}\n🔍 "{q}":',
+            reply_markup=InlineKeyboardMarkup(buttons),
+        )
+        return PICK_MODEL
+
+    if picker == "bd" and gift_id:
+        context.user_data["_search_bd_q"] = q
+        attrs = await _fetch_attributes(gift_id)
+        title = context.user_data.get("gift_title", "")
+        backdrops = attrs.get("backdrops", [])
+        filtered = [b for b in backdrops if q.lower() in b["name"].lower()]
+        if not filtered:
+            await update.message.reply_text(f'Фон не найден по "{q}". Попробуй снова:')
+            context.user_data["_search_picker"] = "bd"
+            return SEARCH_PICKER
+        buttons = [
+            [
+                InlineKeyboardButton(
+                    "Пропустить (любой фон)",
+                    callback_data='{"a":"bd","n":""}',
+                )
+            ],
+        ]
+        for b in filtered:
+            cb_data = json.dumps({"a": "bd", "n": b["name"]})
+            buttons.append([InlineKeyboardButton(b["name"], callback_data=cb_data)])
+        buttons.append(
+            [
+                InlineKeyboardButton(
+                    "🔍 Поиск",
+                    callback_data='{"a":"search","t":"bd"}',
+                )
+            ]
+        )
+        await update.message.reply_text(
+            f'Коллекция: {title}\n🔍 "{q}":',
+            reply_markup=InlineKeyboardMarkup(buttons),
+        )
+        return PICK_BACKDROP
+
+    if picker == "pt" and gift_id:
+        context.user_data["_search_pt_q"] = q
+        attrs = await _fetch_attributes(gift_id)
+        title = context.user_data.get("gift_title", "")
+        patterns = attrs.get("patterns", [])
+        filtered = [p for p in patterns if q.lower() in p["name"].lower()]
+        if not filtered:
+            await update.message.reply_text(f'Паттерн не найден по "{q}". Попробуй снова:')
+            context.user_data["_search_picker"] = "pt"
+            return SEARCH_PICKER
+        buttons = [
+            [
+                InlineKeyboardButton(
+                    "Пропустить (любой паттерн)",
+                    callback_data='{"a":"pt","n":""}',
+                )
+            ],
+        ]
+        for p in filtered:
+            cb_data = json.dumps({"a": "pt", "n": p["name"]})
+            buttons.append([InlineKeyboardButton(p["name"], callback_data=cb_data)])
+        buttons.append(
+            [
+                InlineKeyboardButton(
+                    "🔍 Поиск",
+                    callback_data='{"a":"search","t":"pt"}',
+                )
+            ]
+        )
+        await update.message.reply_text(
+            f'Коллекция: {title}\n🔍 "{q}":',
+            reply_markup=InlineKeyboardMarkup(buttons),
+        )
+        return PICK_PATTERN
+
+    return ConversationHandler.END
+
+
 def build_application(bot_token: str, owner_id: int | None = None) -> Application:
     """Build the telegram bot Application."""
     global _owner_id
@@ -823,6 +1020,9 @@ def build_application(bot_token: str, owner_id: int | None = None) -> Applicatio
             SET_PAYMENT: [
                 CallbackQueryHandler(cb_set_payment, pattern=r'^\{.*"a":"pay"'),
                 CallbackQueryHandler(cb_nav, pattern=r"^(main_menu)$"),
+            ],
+            SEARCH_PICKER: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, msg_search_picker),
             ],
         },
         fallbacks=[
