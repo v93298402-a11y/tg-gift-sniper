@@ -194,23 +194,28 @@ async def _poll_gift_id(
                 try:
                     tg_link = f"https://t.me/nft/{slug}" if slug else ""
                     link_line = f"\n🔗 {tg_link}" if tg_link else ""
+                    from sniper.markets import is_auto_buy
+
+                    buy_status = "Автопокупка: ON" if is_auto_buy() else "Автопокупка: OFF"
                     msg = (
                         f"📍 Telegram Resale\n"
                         f"🎯 {target.name} #{gift.num}\n"
                         f"Цена: {price_fmt} {currency} (макс {target.max_price})\n"
-                        f"Dry-run: {'ON' if cfg.dry_run else 'OFF'}"
+                        f"{buy_status}"
                         f"{link_line}"
                     )
                     await _notify_fn(msg)
                 except Exception:
                     logger.exception("Failed to send bot notification")
 
+            from sniper.markets import is_auto_buy as _is_auto_buy
+
             ok = await buy_gift(
                 client,
                 slug=slug,
                 price=price,
                 gift_title=f"{target.name} #{gift.num}",
-                dry_run=cfg.dry_run,
+                dry_run=not _is_auto_buy(),
                 pay_with_ton=target.pay_with_ton,
             )
             if ok:
@@ -269,10 +274,9 @@ async def run_loop(
     global _warmed_up
     reload_counter = 0
     logger.info(
-        "Starting sniper loop: %d targets, interval=%.1fs, dry_run=%s",
+        "Starting sniper loop: %d targets, interval=%.1fs",
         len(cfg.targets),
         cfg.poll_interval,
-        cfg.dry_run,
     )
 
     while True:
@@ -281,15 +285,12 @@ async def run_loop(
         # Merge config targets with dynamic targets
         if self_mode:
             from sniper.selfbot import get_active_targets as self_targets
-            from sniper.selfbot import is_dry_run as self_dry_run
 
             all_targets = _bot_targets_to_config(self_targets())
-            cfg.dry_run = self_dry_run()
         elif use_bot_targets:
-            from sniper.bot import get_active_targets, is_dry_run
+            from sniper.bot import get_active_targets
 
             all_targets = _bot_targets_to_config(get_active_targets())
-            cfg.dry_run = is_dry_run()
         else:
             all_targets = list(cfg.targets)
 
