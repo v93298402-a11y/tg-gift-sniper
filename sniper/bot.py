@@ -744,6 +744,9 @@ def set_telethon_client(client: TelegramClient, cfg: object | None = None) -> No
 
     saved = _load_targets()
     if saved:
+        for t in saved:
+            if t.get("pay_with_ton") and not t.get("market_max_price"):
+                t["market_max_price"] = t["max_price"]
         _active_targets.extend(saved)
         logger.info("Loaded %d targets from %s", len(saved), _targets_file)
 
@@ -764,5 +767,6 @@ def set_telethon_client(client: TelegramClient, cfg: object | None = None) -> No
                         "model": t.model,
                         "pattern": t.pattern,
                         "backdrop": t.backdrop,
+                        "market_max_price": t.max_price if t.pay_with_ton else None,
                     }
                 )

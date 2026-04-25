@@ -184,6 +184,7 @@ async def _poll_portals(
         "limit": 10,
         "offset": 0,
         "max_price": target.max_price,
+        "collection_name": target.gift_name,
     }
     if target.model:
         params["filter_by_models"] = target.model
@@ -280,9 +281,15 @@ async def run_market_monitor(
 
             current_targets = target_fn() if target_fn else (targets or [])
             if not current_targets:
+                logger.debug("Market monitor: no targets, sleeping")
                 await asyncio.sleep(poll_interval)
                 continue
 
+            logger.debug(
+                "Market cycle: %d targets: %s",
+                len(current_targets),
+                [t.gift_name for t in current_targets],
+            )
             for target in current_targets:
                 all_listings: list[MarketListing] = []
 
