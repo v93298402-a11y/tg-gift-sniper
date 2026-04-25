@@ -15,9 +15,12 @@ logger = logging.getLogger(__name__)
 
 _TONNEL_URL = "https://gifts2.tonnel.network/api/pageGifts"
 _MRKT_URL = "https://api.tgmrkt.io/api/v1/gifts/saling"
-_PORTALS_URL = "https://portal-market.com/api/v1/gifts"
+_PORTALS_API = "https://portal-market.com/api"
+_PORTALS_SEARCH_URL = f"{_PORTALS_API}/nfts/search"
+_PORTALS_COLLECTIONS_URL = f"{_PORTALS_API}/collections"
 
 _seen_market_ids: set[str] = set()
+_portals_collection_map: dict[str, str] = {}
 
 
 @dataclass
@@ -184,27 +187,52 @@ async def _poll_mrkt(
     return listings
 
 
+async def _ensure_portals_collections(client: httpx.AsyncClient, auth_token: str) -> None:
+    """Fetch Portals collection name→id map if not cached."""
+    global _portals_collection_map
+    if _portals_collection_map:
+        return
+    try:
+        headers = {"Authorization": auth_token}
+        resp = await client.get(
+            _PORTALS_COLLECTIONS_URL,
+            params={"offset": 0, "limit": 200},
+            headers=headers,
+            timeout=10,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        for c in data.get("collections", []):
+            _portals_collection_map[c["name"].lower()] = c["id"]
+        logger.info("Portals: cached %d collections", len(_portals_collection_map))
+    except Exception:
+        logger.warning("Failed to fetch Portals collections", exc_info=True)
+
+
 async def _poll_portals(
     client: httpx.AsyncClient,
     target: MarketTarget,
     auth_token: str,
 ) -> list[MarketListing]:
     """Poll Portals marketplace for listings matching target."""
+    await _ensure_portals_collections(client, auth_token)
+
+    col_id = _portals_collection_map.get(target.gift_name.lower())
+    if not col_id:
+        logger.debug("Portals: collection not found for %s", target.gift_name)
+        return []
+
     params: dict[str, Any] = {
-        "status": "listed",
-        "sort_by": "price_asc",
-        "limit": 10,
         "offset": 0,
-        "max_price": target.max_price,
+        "limit": 10,
+        "sort_by": "price asc",
+        "collection_ids[]": col_id,
+        "exclude_bundled": "true",
     }
-    if target.model:
-        params["filter_by_models"] = target.model
-    if target.backdrop:
-        params["filter_by_backdrops"] = target.backdrop
 
     headers = {"Authorization": auth_token}
     try:
-        resp = await client.get(_PORTALS_URL, params=params, headers=headers, timeout=10)
+        resp = await client.get(_PORTALS_SEARCH_URL, params=params, headers=headers, timeout=10)
         if resp.status_code in (401, 403):
             logger.warning("Portals auth error %d for %s", resp.status_code, target.gift_name)
             return []
@@ -218,15 +246,7 @@ async def _poll_portals(
         return []
 
     listings = []
-    items = data.get("items", data.get("gifts", []))
-    if isinstance(data, list):
-        items = data
-
-    for g in items:
-        name = g.get("name", "")
-        if name.lower() != target.gift_name.lower():
-            continue
-
+    for g in data.get("results", []):
         price = g.get("price")
         if price is None:
             continue
@@ -234,7 +254,7 @@ async def _poll_portals(
         if price_f > target.max_price:
             continue
 
-        lid = f"portals_{g.get('id', g.get('tg_id', ''))}"
+        lid = f"portals_{g.get('id', '')}"
         attrs = g.get("attributes", [])
         model = None
         pattern = None
@@ -250,7 +270,7 @@ async def _poll_portals(
         listings.append(
             MarketListing(
                 marketplace="Portals",
-                gift_name=name,
+                gift_name=g.get("name", target.gift_name),
                 price=price_f,
                 currency="TON",
                 model=model,
@@ -309,7 +329,7 @@ async def run_market_monitor(
             )
             for ti, target in enumerate(current_targets):
                 if ti > 0:
-                    await asyncio.sleep(1.0)
+                    await asyncio.sleep(2.0)
                 all_listings: list[MarketListing] = []
 
                 tasks = []
