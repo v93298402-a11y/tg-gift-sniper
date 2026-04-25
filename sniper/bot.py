@@ -160,7 +160,14 @@ async def cb_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     if query.data == "add_target":
         return await _show_collections(query, context)
     elif query.data == "my_targets":
+        context.user_data.pop("_search_targets", None)
         return await _show_my_targets(query, context)
+    elif query.data == "search_targets":
+        context.user_data["_search_targets"] = True
+        await query.edit_message_text(
+            "🔍 Введи запрос для поиска (название, модель, фон, паттерн):"
+        )
+        return None
     elif query.data == "toggle_autobuy":
         return await _toggle_auto_buy(query, context)
     elif query.data == "toggle_notif":
@@ -516,7 +523,7 @@ async def cb_set_payment(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     return ConversationHandler.END
 
 
-async def _show_my_targets(query, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def _show_my_targets(query, context: ContextTypes.DEFAULT_TYPE, search: str = "") -> None:
     if not _active_targets:
         kb = [
             [InlineKeyboardButton("Добавить таргет", callback_data="add_target")],
@@ -527,18 +534,117 @@ async def _show_my_targets(query, context: ContextTypes.DEFAULT_TYPE) -> None:
         )
         return
 
-    buttons = []
+    filtered: list[tuple[int, dict]] = []
+    q = search.lower().strip()
     for i, t in enumerate(_active_targets):
+        if q:
+            fields = [
+                t.get("name", ""),
+                t.get("model", "") or "",
+                t.get("pattern", "") or "",
+                t.get("backdrop", "") or "",
+            ]
+            if not any(q in f.lower() for f in fields):
+                continue
+        filtered.append((i, t))
+
+    if not filtered and q:
+        kb = [
+            [InlineKeyboardButton("Мои таргеты", callback_data="my_targets")],
+            [InlineKeyboardButton("🔍 Поиск", callback_data="search_targets")],
+            [InlineKeyboardButton("« Главное меню", callback_data="main_menu")],
+        ]
+        await query.edit_message_text(
+            f'Ничего не найдено по запросу "{search}".',
+            reply_markup=InlineKeyboardMarkup(kb),
+        )
+        return
+
+    buttons = []
+    for i, t in filtered:
         pay = "TON" if t["pay_with_ton"] else "Stars"
         paused = " ⏸" if t.get("paused") else ""
         label = f"{i + 1}. {t['name']} — {t['max_price']} {pay}{paused}"
         if t.get("model"):
             label += f" [{t['model']}]"
-        buttons.append([InlineKeyboardButton(label, callback_data=f'{{"a":"select","i":{i}}}')])
+        buttons.append(
+            [
+                InlineKeyboardButton(
+                    label,
+                    callback_data=f'{{"a":"select","i":{i}}}',
+                )
+            ]
+        )
 
-    buttons.append([InlineKeyboardButton("Удалить все", callback_data='{"a":"del_all"}')])
+    title = f"Результаты поиска ({len(filtered)}):" if q else "Активные таргеты:"
+    buttons.append([InlineKeyboardButton("🔍 Поиск", callback_data="search_targets")])
+    if not q:
+        buttons.append([InlineKeyboardButton("Удалить все", callback_data='{"a":"del_all"}')])
     buttons.append([InlineKeyboardButton("« Главное меню", callback_data="main_menu")])
-    await query.edit_message_text("Активные таргеты:", reply_markup=InlineKeyboardMarkup(buttons))
+    await query.edit_message_text(title, reply_markup=InlineKeyboardMarkup(buttons))
+
+
+async def _show_my_targets_from_msg(
+    update: Update, context: ContextTypes.DEFAULT_TYPE, search: str = ""
+) -> None:
+    """Show filtered targets via reply_text (for text-based search)."""
+    if not _active_targets:
+        kb = [
+            [InlineKeyboardButton("Добавить таргет", callback_data="add_target")],
+            [InlineKeyboardButton("« Главное меню", callback_data="main_menu")],
+        ]
+        await update.message.reply_text(
+            "Нет активных таргетов.", reply_markup=InlineKeyboardMarkup(kb)
+        )
+        return
+
+    filtered: list[tuple[int, dict]] = []
+    q = search.lower().strip()
+    for i, t in enumerate(_active_targets):
+        if q:
+            fields = [
+                t.get("name", ""),
+                t.get("model", "") or "",
+                t.get("pattern", "") or "",
+                t.get("backdrop", "") or "",
+            ]
+            if not any(q in f.lower() for f in fields):
+                continue
+        filtered.append((i, t))
+
+    if not filtered:
+        kb = [
+            [InlineKeyboardButton("Мои таргеты", callback_data="my_targets")],
+            [InlineKeyboardButton("🔍 Поиск", callback_data="search_targets")],
+            [InlineKeyboardButton("« Главное меню", callback_data="main_menu")],
+        ]
+        await update.message.reply_text(
+            f'Ничего не найдено по запросу "{search}".',
+            reply_markup=InlineKeyboardMarkup(kb),
+        )
+        return
+
+    buttons = []
+    for i, t in filtered:
+        pay = "TON" if t["pay_with_ton"] else "Stars"
+        paused = " ⏸" if t.get("paused") else ""
+        label = f"{i + 1}. {t['name']} — {t['max_price']} {pay}{paused}"
+        if t.get("model"):
+            label += f" [{t['model']}]"
+        buttons.append(
+            [
+                InlineKeyboardButton(
+                    label,
+                    callback_data=f'{{"a":"select","i":{i}}}',
+                )
+            ]
+        )
+
+    title = f'🔍 Результаты "{search}" ({len(filtered)}):'
+    buttons.append([InlineKeyboardButton("🔍 Новый поиск", callback_data="search_targets")])
+    buttons.append([InlineKeyboardButton("Все таргеты", callback_data="my_targets")])
+    buttons.append([InlineKeyboardButton("« Главное меню", callback_data="main_menu")])
+    await update.message.reply_text(title, reply_markup=InlineKeyboardMarkup(buttons))
 
 
 async def cb_target_action(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -586,6 +692,10 @@ async def cb_target_action(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         text = f"{t['name']}{paused_label}\nМакс. цена: {t['max_price']} {pay}\n"
         if t.get("model"):
             text += f"Модель: {t['model']}\n"
+        if t.get("backdrop"):
+            text += f"Фон: {t['backdrop']}\n"
+        if t.get("pattern"):
+            text += f"Паттерн: {t['pattern']}\n"
         text += "\nВыбери действие:"
         kb = [
             [
@@ -618,8 +728,14 @@ async def cb_target_action(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         return
 
 
-async def msg_edit_price(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle new price input for target editing."""
+async def msg_text_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle text input: search query or price editing."""
+    if context.user_data.get("_search_targets"):
+        context.user_data.pop("_search_targets", None)
+        query_text = update.message.text.strip()
+        await _show_my_targets_from_msg(update, context, query_text)
+        return
+
     idx = context.user_data.get("_edit_idx")
     if idx is None or idx < 0 or idx >= len(_active_targets):
         await update.message.reply_text("Ошибка. Попробуй снова через /start")
@@ -681,7 +797,7 @@ def build_application(bot_token: str, owner_id: int | None = None) -> Applicatio
         entry_points=[
             CallbackQueryHandler(
                 cb_main_menu,
-                pattern=r"^(add_target|my_targets|toggle_autobuy|toggle_notif|main_menu)$",
+                pattern=r"^(add_target|my_targets|search_targets|toggle_autobuy|toggle_notif|main_menu)$",
             ),
         ],
         states={
@@ -721,11 +837,11 @@ def build_application(bot_token: str, owner_id: int | None = None) -> Applicatio
     app.add_handler(
         CallbackQueryHandler(cb_target_action, pattern=r'^\{.*"a":"(del|pause|edit|select)')
     )
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, msg_edit_price))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, msg_text_input))
     app.add_handler(
         CallbackQueryHandler(
             cb_main_menu,
-            pattern=r"^(my_targets|toggle_autobuy|toggle_notif|main_menu)$",
+            pattern=r"^(my_targets|search_targets|toggle_autobuy|toggle_notif|main_menu)$",
         )
     )
 
