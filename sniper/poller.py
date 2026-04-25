@@ -238,8 +238,7 @@ async def run_loop(
         elif use_bot_targets:
             from sniper.bot import get_active_targets, is_dry_run
 
-            all_targets = list(cfg.targets)
-            all_targets.extend(_bot_targets_to_config(get_active_targets()))
+            all_targets = _bot_targets_to_config(get_active_targets())
             cfg.dry_run = is_dry_run()
         else:
             all_targets = list(cfg.targets)

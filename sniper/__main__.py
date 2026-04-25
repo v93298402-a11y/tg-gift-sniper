@@ -79,7 +79,7 @@ async def _run(cfg: Config, bot_mode: bool = False, self_mode: bool = False) -> 
             await client.disconnect()
             sys.exit(1)
 
-        set_telethon_client(client)
+        set_telethon_client(client, cfg)
         app = build_application(bot_token, owner_id=me.id)
 
         use_dynamic_targets = True

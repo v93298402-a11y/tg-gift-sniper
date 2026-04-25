@@ -554,6 +554,20 @@ def build_application(bot_token: str, owner_id: int | None = None) -> Applicatio
     return app
 
 
-def set_telethon_client(client: TelegramClient) -> None:
-    global _telethon_client
+def set_telethon_client(client: TelegramClient, cfg: object | None = None) -> None:
+    global _telethon_client, _dry_run
     _telethon_client = client
+    if cfg is not None:
+        _dry_run = cfg.dry_run
+        for t in cfg.targets:
+            _active_targets.append(
+                {
+                    "gift_id": t.gift_id,
+                    "max_price": t.max_price,
+                    "name": t.name,
+                    "pay_with_ton": t.pay_with_ton,
+                    "model": t.model,
+                    "pattern": t.pattern,
+                    "backdrop": t.backdrop,
+                }
+            )
