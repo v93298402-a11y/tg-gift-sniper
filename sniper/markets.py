@@ -359,6 +359,26 @@ async def _buy_portals(
     return False
 
 
+def _record_market_listings(listings: list[MarketListing], collection: str) -> None:
+    """Record listings for stats tracking (floor + sales detection)."""
+    from sniper.stats import record_listings
+
+    by_market: dict[str, list[dict]] = {}
+    for li in listings:
+        by_market.setdefault(li.marketplace, []).append(
+            {
+                "id": li.listing_id,
+                "price": li.price,
+                "currency": li.currency,
+                "gift_number": li.gift_number,
+                "model": li.model,
+                "url": li.url,
+            }
+        )
+    for market, items in by_market.items():
+        record_listings(collection, market, items)
+
+
 _auto_buy_enabled = False
 
 
@@ -434,6 +454,8 @@ async def run_market_monitor(
                     for r in results:
                         if isinstance(r, list):
                             all_listings.extend(r)
+                            # Record listings for stats tracking
+                            _record_market_listings(r, target.gift_name)
                         elif isinstance(r, Exception):
                             _error_count += 1
                             logger.warning("Market poll error: %s", r)

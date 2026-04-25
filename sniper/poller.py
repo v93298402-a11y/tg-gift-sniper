@@ -88,6 +88,39 @@ def _gift_matches_filter(gift: types.StarGiftUnique, target: TargetGift) -> bool
     return False
 
 
+def _record_tg_listings(gifts: list, targets: list[TargetGift]) -> None:
+    """Record Telegram resale listings for stats tracking."""
+    from sniper.stats import record_listings
+
+    by_collection: dict[str, list[dict]] = {}
+    for gift in gifts:
+        if not isinstance(gift, types.StarGiftUnique):
+            continue
+        prices = _extract_prices(gift)
+        ton_price = prices.get("ton")
+        if ton_price is None:
+            continue
+        slug = gift.slug or ""
+        # Determine collection name from targets
+        coll_name = "Unknown"
+        for t in targets:
+            coll_name = t.name
+            break
+        url = f"https://t.me/nft/{slug}" if slug else ""
+        by_collection.setdefault(coll_name, []).append(
+            {
+                "id": f"tg_{slug}",
+                "price": ton_price,
+                "currency": "TON",
+                "gift_number": gift.num if hasattr(gift, "num") else None,
+                "model": None,
+                "url": url,
+            }
+        )
+    for coll, items in by_collection.items():
+        record_listings(coll, "Telegram", items)
+
+
 async def _poll_gift_id(
     client: TelegramClient,
     gift_id: int,
@@ -141,6 +174,9 @@ async def _poll_gift_id(
     if not hasattr(result, "gifts") or not result.gifts:
         logger.debug("No resale listings for gift_id=%d", gift_id)
         return
+
+    # Record listings for stats tracking
+    _record_tg_listings(result.gifts, targets)
 
     for gift in result.gifts:
         if not isinstance(gift, types.StarGiftUnique):
