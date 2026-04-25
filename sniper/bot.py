@@ -469,10 +469,16 @@ async def cb_set_payment(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             }
         )
 
+    has_ton = any(t["pay_with_ton"] for t in targets_to_add)
     for t in targets_to_add:
-        t["market_max_price"] = max_price
+        t["market_max_price"] = max_price if t["pay_with_ton"] else None
         _active_targets.append(t)
     _save_targets()
+
+    if has_ton:
+        markets_label = "Telegram + Tonnel + MRKT + Portals"
+    else:
+        markets_label = "Только Telegram"
 
     summary = f"Таргет добавлен!\n\nКоллекция: {gift_title}"
     if model:
@@ -484,7 +490,7 @@ async def cb_set_payment(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     summary += f"\nМакс. цена: {max_price}"
     payment_label = {"stars": "Stars", "ton": "TON", "both": "Stars + TON"}
     summary += f"\nОплата: {payment_label[method]}"
-    summary += "\nМаркеты: Telegram + Tonnel + MRKT + Portals"
+    summary += f"\nМаркеты: {markets_label}"
     summary += f"\nDry-run: {'ON' if _dry_run else 'OFF'}"
     summary += f"\n\nВсего активных таргетов: {len(_active_targets)}"
 
