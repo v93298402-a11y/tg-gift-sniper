@@ -179,9 +179,8 @@ async def _show_collections(query, context: ContextTypes.DEFAULT_TYPE) -> int:
         await query.edit_message_text("Нет коллекций на ресейле.")
         return ConversationHandler.END
 
-    # Show collections in pages of 8
     buttons = []
-    for c in collections[:24]:
+    for c in collections:
         label = f"{c['title']} ({c['resale_count']} шт)"
         data = json.dumps({"a": "col", "id": c["id"], "t": c["title"]})
         if len(data) <= 64:
