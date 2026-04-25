@@ -113,8 +113,14 @@ async def _fetch_collections() -> list[dict]:
     return collections
 
 
+_attrs_cache: dict[int, dict[str, list[dict]]] = {}
+
+
 async def _fetch_attributes(gift_id: int) -> dict[str, list[dict]]:
     """Fetch available models/patterns/backdrops for a gift collection."""
+    if gift_id in _attrs_cache:
+        return _attrs_cache[gift_id]
+
     if not _telethon_client:
         return {}
     result = await _telethon_client(
@@ -139,6 +145,8 @@ async def _fetch_attributes(gift_id: int) -> dict[str, list[dict]]:
         elif isinstance(attr, types.StarGiftAttributeBackdrop):
             attrs["backdrops"].append({"name": attr.name})
 
+    _attrs_cache[gift_id] = attrs
+
     return attrs
 
 
@@ -148,6 +156,9 @@ async def _fetch_attributes(gift_id: int) -> dict[str, list[dict]]:
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not update.effective_user or not _check_owner(update.effective_user.id):
         return
+    for key in list(context.user_data.keys()):
+        if key.startswith("_"):
+            context.user_data.pop(key, None)
     await update.message.reply_text(
         "Снайпер-бот. Выбери действие:",
         reply_markup=InlineKeyboardMarkup(_main_menu_kb()),
