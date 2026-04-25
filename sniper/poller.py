@@ -189,12 +189,14 @@ async def _poll_gift_id(
 
             if _notify_fn:
                 try:
+                    tg_link = f"https://t.me/nft/{slug}" if slug else ""
+                    link_line = f"\n🔗 {tg_link}" if tg_link else ""
                     msg = (
                         f"📍 Telegram Resale\n"
                         f"🎯 {target.name} #{gift.num}\n"
                         f"Цена: {price_fmt} {currency} (макс {target.max_price})\n"
-                        f"Slug: {slug}\n"
                         f"Dry-run: {'ON' if cfg.dry_run else 'OFF'}"
+                        f"{link_line}"
                     )
                     await _notify_fn(msg)
                 except Exception:

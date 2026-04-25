@@ -44,6 +44,7 @@ class MarketListing:
     backdrop: str | None = None
     gift_number: int | None = None
     listing_id: str = ""
+    url: str = ""
 
 
 async def _poll_tonnel(
@@ -102,18 +103,24 @@ async def _poll_tonnel(
         if price_f > target.max_price:
             continue
 
-        lid = f"tonnel_{g.get('gift_id', '')}"
+        gift_id = g.get("gift_id", "")
+        lid = f"tonnel_{gift_id}"
+        gift_num = g.get("gift_num")
+        gname = g.get("gift_name", target.gift_name)
+        slug = gname.replace(" ", "") + f"-{gift_num}" if gift_num else ""
+        url = f"https://t.me/nft/{slug}" if slug else ""
         listings.append(
             MarketListing(
                 marketplace="Tonnel",
-                gift_name=g.get("gift_name", target.gift_name),
+                gift_name=gname,
                 price=price_f,
                 currency="TON",
                 model=g.get("model"),
                 pattern=g.get("pattern"),
                 backdrop=g.get("backdrop"),
-                gift_number=g.get("gift_num"),
+                gift_number=gift_num,
                 listing_id=lid,
+                url=url,
             )
         )
     return listings
@@ -170,18 +177,23 @@ async def _poll_mrkt(
         if price_ton > target.max_price:
             continue
 
-        lid = f"mrkt_{g.get('id', g.get('giftId', ''))}"
+        gift_id = g.get("id", g.get("giftId", ""))
+        lid = f"mrkt_{gift_id}"
+        gift_num = g.get("number")
+        coll = g.get("collectionName", target.gift_name)
+        url = f"https://t.me/mrkt/app?startapp=gift_{gift_id}" if gift_id else ""
         listings.append(
             MarketListing(
                 marketplace="MRKT",
-                gift_name=g.get("collectionName", target.gift_name),
+                gift_name=coll,
                 price=price_ton,
                 currency="TON",
                 model=g.get("modelTitle"),
                 pattern=g.get("symbolName"),
                 backdrop=g.get("backdropName"),
-                gift_number=g.get("number"),
+                gift_number=gift_num,
                 listing_id=lid,
+                url=url,
             )
         )
     return listings
@@ -267,6 +279,8 @@ async def _poll_portals(
             elif a.get("type") == "backdrop":
                 backdrop = a.get("value")
 
+        tg_id = g.get("tg_id", "")
+        url = f"https://portal-market.com/nft/{tg_id}" if tg_id else ""
         listings.append(
             MarketListing(
                 marketplace="Portals",
@@ -278,6 +292,7 @@ async def _poll_portals(
                 backdrop=backdrop,
                 gift_number=g.get("external_collection_number"),
                 listing_id=lid,
+                url=url,
             )
         )
     return listings
@@ -376,12 +391,14 @@ async def run_market_monitor(
                     if notify_fn:
                         model_info = f"\nМодель: {listing.model}" if listing.model else ""
                         num = f" #{listing.gift_number}" if listing.gift_number else ""
+                        link = f"\n🔗 {listing.url}" if listing.url else ""
                         msg = (
                             f"📍 {listing.marketplace}\n"
                             f"🎯 {listing.gift_name}{num}\n"
                             f"Цена: {listing.price:.4f} {listing.currency} "
                             f"(макс {target.max_price})"
                             f"{model_info}"
+                            f"{link}"
                         )
                         try:
                             await notify_fn(msg)
