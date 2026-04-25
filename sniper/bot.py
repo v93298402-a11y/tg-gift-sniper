@@ -517,7 +517,7 @@ async def _show_my_targets(query, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     text = "Активные таргеты:\n\n"
-    buttons = []
+    num_buttons = []
     for i, t in enumerate(_active_targets):
         pay = "TON" if t["pay_with_ton"] else "Stars"
         paused = " ⏸" if t.get("paused") else ""
@@ -526,16 +526,12 @@ async def _show_my_targets(query, context: ContextTypes.DEFAULT_TYPE) -> None:
         if t.get("model"):
             line += f" [{t['model']}]"
         text += line + "\n"
-        row = [
-            InlineKeyboardButton(f"{n}✏️", callback_data=f'{{"a":"edit","i":{i}}}'),
-            InlineKeyboardButton(
-                f"{n}▶️" if t.get("paused") else f"{n}⏸",
-                callback_data=f'{{"a":"pause","i":{i}}}',
-            ),
-            InlineKeyboardButton(f"{n}🗑", callback_data=f'{{"a":"del","i":{i}}}'),
-        ]
-        buttons.append(row)
+        num_buttons.append(InlineKeyboardButton(str(n), callback_data=f'{{"a":"select","i":{i}}}'))
 
+    text += "\nНажми номер для действий:"
+    buttons = []
+    for row_start in range(0, len(num_buttons), 5):
+        buttons.append(num_buttons[row_start : row_start + 5])
     buttons.append([InlineKeyboardButton("Удалить все", callback_data='{"a":"del_all"}')])
     buttons.append([InlineKeyboardButton("« Главное меню", callback_data="main_menu")])
     await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(buttons))
@@ -587,8 +583,30 @@ async def cb_target_action(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         )
         return
 
-    if action == "info":
-        await _show_my_targets(query, context)
+    if action == "select":
+        t = _active_targets[idx]
+        pay = "TON" if t["pay_with_ton"] else "Stars"
+        paused_label = " (на паузе)" if t.get("paused") else ""
+        text = f"{t['name']}{paused_label}\nМакс. цена: {t['max_price']} {pay}\n"
+        if t.get("model"):
+            text += f"Модель: {t['model']}\n"
+        text += "\nВыбери действие:"
+        kb = [
+            [
+                InlineKeyboardButton("✏️ Изменить цену", callback_data=f'{{"a":"edit","i":{idx}}}'),
+            ],
+            [
+                InlineKeyboardButton(
+                    "▶️ Возобновить" if t.get("paused") else "⏸ Пауза",
+                    callback_data=f'{{"a":"pause","i":{idx}}}',
+                ),
+            ],
+            [
+                InlineKeyboardButton("🗑 Удалить", callback_data=f'{{"a":"del","i":{idx}}}'),
+            ],
+            [InlineKeyboardButton("« Назад", callback_data="my_targets")],
+        ]
+        await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb))
         return
 
     if action == "edit":
@@ -705,7 +723,7 @@ def build_application(bot_token: str, owner_id: int | None = None) -> Applicatio
     app.add_handler(CommandHandler("menu", cmd_menu))
     app.add_handler(conv_handler)
     app.add_handler(
-        CallbackQueryHandler(cb_target_action, pattern=r'^\{.*"a":"(del|pause|edit|info)')
+        CallbackQueryHandler(cb_target_action, pattern=r'^\{.*"a":"(del|pause|edit|select)')
     )
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, msg_edit_price))
     app.add_handler(
