@@ -142,7 +142,7 @@ async def _poll_mrkt(
         "promotedFirst": False,
     }
 
-    headers = {"Authorization": auth_token}
+    headers = {"Authorization": auth_token, "Referer": "https://cdn.tgmrkt.io/"}
     try:
         resp = await client.post(_MRKT_URL, json=body, headers=headers, timeout=10)
         if resp.status_code == 429:
