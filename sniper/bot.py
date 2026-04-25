@@ -255,10 +255,6 @@ async def cb_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
             "🔍 Введи запрос для поиска (название, модель, фон, паттерн):"
         )
         return None
-    elif query.data == "stats":
-        return await _show_stats_menu(query, context)
-    elif query.data.startswith("stats_"):
-        return await _show_stats_period(query, context)
     elif query.data == "toggle_autobuy":
         return await _toggle_auto_buy(query, context)
     elif query.data == "toggle_notif":
@@ -278,7 +274,6 @@ def _main_menu_kb() -> list[list[InlineKeyboardButton]]:
     return [
         [InlineKeyboardButton("Добавить таргет", callback_data="add_target")],
         [InlineKeyboardButton("Мои таргеты", callback_data="my_targets")],
-        [InlineKeyboardButton("📊 Статистика", callback_data="stats")],
         [
             InlineKeyboardButton(auto_buy_label, callback_data="toggle_autobuy"),
             InlineKeyboardButton(notif_label, callback_data="toggle_notif"),
@@ -310,45 +305,6 @@ async def _toggle_notifications(query, context: ContextTypes.DEFAULT_TYPE) -> No
     await query.edit_message_text(
         f"Уведомления: {status}",
         reply_markup=InlineKeyboardMarkup(_main_menu_kb()),
-    )
-
-
-async def _show_stats_menu(query, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Show stats period selection."""
-    from sniper.stats import get_floor_summary
-
-    floor_text = get_floor_summary()
-    kb = [
-        [
-            InlineKeyboardButton("15 мин", callback_data="stats_15"),
-            InlineKeyboardButton("30 мин", callback_data="stats_30"),
-            InlineKeyboardButton("60 мин", callback_data="stats_60"),
-        ],
-        [InlineKeyboardButton("« Главное меню", callback_data="main_menu")],
-    ]
-    await query.edit_message_text(
-        f"{floor_text}\n\nВыбери период для продаж ниже флора на 30%+:",
-        reply_markup=InlineKeyboardMarkup(kb),
-    )
-
-
-async def _show_stats_period(query, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Show stats for selected period."""
-    from sniper.stats import get_stats_text
-
-    minutes = int(query.data.split("_")[1])
-    text = get_stats_text(minutes=minutes)
-    kb = [
-        [
-            InlineKeyboardButton("15 мин", callback_data="stats_15"),
-            InlineKeyboardButton("30 мин", callback_data="stats_30"),
-            InlineKeyboardButton("60 мин", callback_data="stats_60"),
-        ],
-        [InlineKeyboardButton("« Главное меню", callback_data="main_menu")],
-    ]
-    await query.edit_message_text(
-        text,
-        reply_markup=InlineKeyboardMarkup(kb),
     )
 
 
@@ -1143,7 +1099,7 @@ def build_application(bot_token: str, owner_id: int | None = None) -> Applicatio
         entry_points=[
             CallbackQueryHandler(
                 cb_main_menu,
-                pattern=r"^(add_target|my_targets|search_targets|stats|stats_\d+|toggle_autobuy|toggle_notif|main_menu)$",
+                pattern=r"^(add_target|my_targets|search_targets|toggle_autobuy|toggle_notif|main_menu)$",
             ),
         ],
         states={
@@ -1191,7 +1147,7 @@ def build_application(bot_token: str, owner_id: int | None = None) -> Applicatio
     app.add_handler(
         CallbackQueryHandler(
             cb_main_menu,
-            pattern=r"^(my_targets|search_targets|stats|stats_\d+|toggle_autobuy|toggle_notif|main_menu)$",
+            pattern=r"^(my_targets|search_targets|toggle_autobuy|toggle_notif|main_menu)$",
         )
     )
 
