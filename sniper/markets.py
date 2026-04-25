@@ -181,7 +181,8 @@ async def _poll_mrkt(
         lid = f"mrkt_{gift_id}"
         gift_num = g.get("number")
         coll = g.get("collectionName", target.gift_name)
-        url = f"https://t.me/mrkt/app?startapp=gift_{gift_id}" if gift_id else ""
+        slug = coll.replace(" ", "") + f"-{gift_num}" if gift_num else ""
+        url = f"https://t.me/nft/{slug}" if slug else ""
         listings.append(
             MarketListing(
                 marketplace="MRKT",
@@ -280,7 +281,7 @@ async def _poll_portals(
                 backdrop = a.get("value")
 
         tg_id = g.get("tg_id", "")
-        url = f"https://portal-market.com/nft/{tg_id}" if tg_id else ""
+        url = f"https://t.me/nft/{tg_id}" if tg_id else ""
         listings.append(
             MarketListing(
                 marketplace="Portals",
