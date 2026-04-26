@@ -96,6 +96,12 @@ def _gift_matches_filter(gift: types.StarGiftUnique, target: TargetGift) -> bool
     return False
 
 
+# Fixed gap between per-collection requests inside one polling cycle.
+# Telegram's rate limiter on GetResaleStarGiftsRequest throttled the bot at
+# 1.0s; 2.0s keeps the flood-wait rate at ~0 for typical target counts.
+_PER_COLLECTION_GAP = 2.0
+
+
 async def _poll_gift_id(
     client: TelegramClient,
     gift_id: int,
@@ -316,9 +322,7 @@ async def run_loop(
             by_gift[target.gift_id].append(target)
 
         # Space requests out so Telegram's per-method rate limiter doesn't
-        # emit FloodWait. Production logs showed ~4 FloodWaits/min when all
-        # gift_ids were polled back-to-back.
-        _PER_COLLECTION_GAP = 1.0
+        # emit FloodWait on GetResaleStarGiftsRequest.
         gift_items = list(by_gift.items())
         for i, (gift_id, targets) in enumerate(gift_items):
             if i > 0:
