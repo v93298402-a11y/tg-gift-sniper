@@ -68,6 +68,33 @@ class MarketListing:
     raw_id: str = ""  # marketplace-native ID for buy API
 
 
+def _match_listing_to_target(
+    listing: MarketListing, targets: list[MarketTarget]
+) -> MarketTarget | None:
+    """Return the first target whose filters (collection/model/backdrop/pattern/price)
+    accept this listing, or None."""
+    listing_name = (listing.gift_name or "").lower()
+    listing_model = (listing.model or "").lower()
+    listing_backdrop = (listing.backdrop or "").lower()
+    listing_pattern = (listing.pattern or "").lower()
+
+    for t in targets:
+        if listing.marketplace.lower() not in [m.lower() for m in t.markets]:
+            continue
+        if t.gift_name and t.gift_name.lower() != listing_name:
+            continue
+        if t.model and t.model.lower() != listing_model:
+            continue
+        if t.backdrop and t.backdrop.lower() != listing_backdrop:
+            continue
+        if t.pattern and t.pattern.lower() != listing_pattern:
+            continue
+        if listing.price > t.max_price:
+            continue
+        return t
+    return None
+
+
 async def _poll_tonnel(
     client: httpx.AsyncClient,
     target: MarketTarget,
@@ -147,24 +174,36 @@ async def _poll_tonnel(
     return listings
 
 
-async def _poll_mrkt(
+async def _poll_mrkt_batch(
     client: httpx.AsyncClient,
-    target: MarketTarget,
+    targets: list[MarketTarget],
     auth_token: str,
 ) -> list[MarketListing]:
-    """Poll MRKT marketplace for listings matching target."""
+    """Poll MRKT for all targets in a single request.
+
+    MRKT's /gifts/saling endpoint accepts an array of collection names, so one
+    batched call replaces N per-target calls and avoids HTTP 429 rate limits.
+    Filters (model/backdrop/pattern) and per-target max_price are applied
+    client-side because the API applies a single set of filters to the whole
+    request.
+    """
+    if not targets:
+        return []
+
+    collections = sorted({t.gift_name for t in targets})
+    max_price_ton = max(t.max_price for t in targets)
     body: dict[str, Any] = {
-        "collectionNames": [target.gift_name],
-        "modelNames": [target.model] if target.model else [],
-        "backdropNames": [target.backdrop] if target.backdrop else [],
-        "symbolNames": [target.pattern] if target.pattern else [],
+        "collectionNames": collections,
+        "modelNames": [],
+        "backdropNames": [],
+        "symbolNames": [],
         "ordering": "Price",
         "lowToHigh": True,
-        "maxPrice": int(target.max_price * 1_000_000_000),
+        "maxPrice": int(max_price_ton * 1_000_000_000),
         "minPrice": None,
         "mintable": None,
         "number": None,
-        "count": 10,
+        "count": 100,
         "cursor": "",
         "query": None,
         "promotedFirst": False,
@@ -174,7 +213,7 @@ async def _poll_mrkt(
     try:
         resp = await client.post(_MRKT_URL, json=body, headers=headers, timeout=10)
         if resp.status_code == 429:
-            logger.warning("MRKT 429 rate-limited for %s", target.gift_name)
+            logger.warning("MRKT 429 rate-limited (batch of %d collections)", len(collections))
             return []
         if resp.status_code in (401, 403):
             raise _MarketAuthError("MRKT", resp.status_code)
@@ -183,10 +222,10 @@ async def _poll_mrkt(
     except _MarketAuthError:
         raise
     except httpx.HTTPStatusError:
-        logger.warning("MRKT HTTP error for %s", target.gift_name, exc_info=True)
+        logger.warning("MRKT HTTP error (batch)", exc_info=True)
         return []
     except Exception:
-        logger.warning("MRKT request failed for %s", target.gift_name)
+        logger.warning("MRKT request failed (batch)")
         return []
 
     listings = []
@@ -199,13 +238,11 @@ async def _poll_mrkt(
         if sale_price is None:
             continue
         price_ton = float(sale_price) / 1_000_000_000
-        if price_ton > target.max_price:
-            continue
 
         gift_id = g.get("id", g.get("giftId", ""))
         lid = f"mrkt_{gift_id}"
         gift_num = g.get("number")
-        coll = g.get("collectionName", target.gift_name)
+        coll = g.get("collectionName", "")
         slug = coll.replace(" ", "") + f"-{gift_num}" if gift_num else ""
         url = f"https://t.me/nft/{slug}" if slug else ""
         listings.append(
@@ -248,41 +285,58 @@ async def _ensure_portals_collections(client: httpx.AsyncClient, auth_token: str
         logger.warning("Failed to fetch Portals collections", exc_info=True)
 
 
-async def _poll_portals(
+async def _poll_portals_batch(
     client: httpx.AsyncClient,
-    target: MarketTarget,
+    targets: list[MarketTarget],
     auth_token: str,
 ) -> list[MarketListing]:
-    """Poll Portals marketplace for listings matching target."""
-    await _ensure_portals_collections(client, auth_token)
+    """Poll Portals for all targets in a single request.
 
-    col_id = _portals_collection_map.get(target.gift_name.lower())
-    if not col_id:
-        logger.debug("Portals: collection not found for %s", target.gift_name)
+    Portals' /nfts/search accepts multiple `collection_ids[]` params, so one
+    batched call replaces N per-target calls. Per-target max_price and filters
+    are applied client-side in run_market_monitor.
+    """
+    if not targets:
         return []
 
-    params: dict[str, Any] = {
-        "offset": 0,
-        "limit": 10,
-        "sort_by": "price asc",
-        "collection_ids[]": col_id,
-        "exclude_bundled": "true",
-    }
+    await _ensure_portals_collections(client, auth_token)
+
+    col_ids: list[str] = []
+    for t in targets:
+        cid = _portals_collection_map.get(t.gift_name.lower())
+        if cid and cid not in col_ids:
+            col_ids.append(cid)
+
+    if not col_ids:
+        logger.debug("Portals: no known collections for %d targets", len(targets))
+        return []
+
+    params: list[tuple[str, str]] = [
+        ("offset", "0"),
+        ("limit", "100"),
+        ("sort_by", "price asc"),
+        ("exclude_bundled", "true"),
+    ]
+    for cid in col_ids:
+        params.append(("collection_ids[]", cid))
 
     headers = {"Authorization": auth_token}
     try:
         resp = await client.get(_PORTALS_SEARCH_URL, params=params, headers=headers, timeout=10)
         if resp.status_code in (401, 403):
             raise _MarketAuthError("Portals", resp.status_code)
+        if resp.status_code == 429:
+            logger.warning("Portals 429 rate-limited (batch of %d collections)", len(col_ids))
+            return []
         resp.raise_for_status()
         data = resp.json()
     except _MarketAuthError:
         raise
     except httpx.HTTPStatusError:
-        logger.warning("Portals HTTP error for %s", target.gift_name, exc_info=True)
+        logger.warning("Portals HTTP error (batch)", exc_info=True)
         return []
     except Exception:
-        logger.warning("Portals request failed for %s", target.gift_name)
+        logger.warning("Portals request failed (batch)")
         return []
 
     listings = []
@@ -291,8 +345,6 @@ async def _poll_portals(
         if price is None:
             continue
         price_f = float(price)
-        if price_f > target.max_price:
-            continue
 
         nft_id = g.get("id", "")
         lid = f"portals_{nft_id}"
@@ -313,7 +365,7 @@ async def _poll_portals(
         listings.append(
             MarketListing(
                 marketplace="Portals",
-                gift_name=g.get("name", target.gift_name),
+                gift_name=g.get("name", ""),
                 price=price_f,
                 currency="TON",
                 model=model,
@@ -441,116 +493,130 @@ async def run_market_monitor(
                 len(current_targets),
                 [t.gift_name for t in current_targets],
             )
-            for ti, target in enumerate(current_targets):
-                if ti > 0:
-                    await asyncio.sleep(2.0)
-                all_listings: list[MarketListing] = []
 
-                tasks = []
-                if "tonnel" in active_markets and "tonnel" in target.markets:
-                    tasks.append(_poll_tonnel(client, target))
-                if "mrkt" in active_markets and "mrkt" in target.markets:
-                    tasks.append(_poll_mrkt(client, target, mrkt_token))
-                if "portals" in active_markets and "portals" in target.markets:
-                    tasks.append(_poll_portals(client, target, portals_token))
+            tonnel_targets = [
+                t for t in current_targets
+                if "tonnel" in active_markets and "tonnel" in t.markets
+            ]
+            mrkt_targets = [
+                t for t in current_targets
+                if "mrkt" in active_markets and "mrkt" in t.markets
+            ]
+            portals_targets = [
+                t for t in current_targets
+                if "portals" in active_markets and "portals" in t.markets
+            ]
 
-                if tasks:
-                    results = await asyncio.gather(*tasks, return_exceptions=True)
-                    for r in results:
-                        if isinstance(r, list):
-                            all_listings.extend(r)
-                        elif isinstance(r, _MarketAuthError):
-                            if r.marketplace == "MRKT" and mrkt_reauth_fn:
-                                logger.warning(
-                                    "MRKT auth expired (status %d), re-fetching token…",
-                                    r.status,
-                                )
-                                try:
-                                    new_token = await mrkt_reauth_fn()
-                                except Exception:
-                                    logger.exception("MRKT re-auth failed")
-                                    new_token = ""
-                                if new_token:
-                                    mrkt_token = new_token
-                                    logger.info("MRKT token refreshed")
-                            elif r.marketplace == "Portals" and portals_reauth_fn:
-                                logger.warning(
-                                    "Portals auth expired (status %d), re-fetching token…",
-                                    r.status,
-                                )
-                                try:
-                                    new_token = await portals_reauth_fn()
-                                except Exception:
-                                    logger.exception("Portals re-auth failed")
-                                    new_token = ""
-                                if new_token:
-                                    portals_token = new_token
-                                    logger.info("Portals token refreshed")
-                            else:
-                                logger.warning(
-                                    "%s auth error %d (no re-auth fn configured)",
-                                    r.marketplace,
-                                    r.status,
-                                )
-                        elif isinstance(r, Exception):
-                            _error_count += 1
-                            logger.warning("Market poll error: %s", r)
-                            if (
-                                notify_fn
-                                and _error_count >= 3
-                                and (time.monotonic() - _last_error_alert) > 300
-                            ):
-                                _last_error_alert = time.monotonic()
-                                try:
-                                    await notify_fn(f"⚠️ Ошибки маркетов ({_error_count}x)\n{r}")
-                                except Exception:
-                                    pass
+            tasks: list[Coroutine[Any, Any, list[MarketListing]]] = []
+            for t in tonnel_targets:
+                tasks.append(_poll_tonnel(client, t))
+            if mrkt_targets:
+                tasks.append(_poll_mrkt_batch(client, mrkt_targets, mrkt_token))
+            if portals_targets:
+                tasks.append(_poll_portals_batch(client, portals_targets, portals_token))
 
-                for listing in all_listings:
-                    if listing.listing_id in _seen_market_ids:
-                        continue
-                    _seen_market_ids.add(listing.listing_id)
+            all_listings: list[MarketListing] = []
+            if tasks:
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+                for r in results:
+                    if isinstance(r, list):
+                        all_listings.extend(r)
+                    elif isinstance(r, _MarketAuthError):
+                        if r.marketplace == "MRKT" and mrkt_reauth_fn:
+                            logger.warning(
+                                "MRKT auth expired (status %d), re-fetching token…",
+                                r.status,
+                            )
+                            try:
+                                new_token = await mrkt_reauth_fn()
+                            except Exception:
+                                logger.exception("MRKT re-auth failed")
+                                new_token = ""
+                            if new_token:
+                                mrkt_token = new_token
+                                logger.info("MRKT token refreshed")
+                        elif r.marketplace == "Portals" and portals_reauth_fn:
+                            logger.warning(
+                                "Portals auth expired (status %d), re-fetching token…",
+                                r.status,
+                            )
+                            try:
+                                new_token = await portals_reauth_fn()
+                            except Exception:
+                                logger.exception("Portals re-auth failed")
+                                new_token = ""
+                            if new_token:
+                                portals_token = new_token
+                                logger.info("Portals token refreshed")
+                        else:
+                            logger.warning(
+                                "%s auth error %d (no re-auth fn configured)",
+                                r.marketplace,
+                                r.status,
+                            )
+                    elif isinstance(r, Exception):
+                        _error_count += 1
+                        logger.warning("Market poll error: %s", r)
+                        if (
+                            notify_fn
+                            and _error_count >= 3
+                            and (time.monotonic() - _last_error_alert) > 300
+                        ):
+                            _last_error_alert = time.monotonic()
+                            try:
+                                await notify_fn(f"⚠️ Ошибки маркетов ({_error_count}x)\n{r}")
+                            except Exception:
+                                pass
 
-                    if not _warmed_up:
-                        continue
+            for listing in all_listings:
+                if listing.listing_id in _seen_market_ids:
+                    continue
+                _seen_market_ids.add(listing.listing_id)
 
-                    logger.info(
-                        "MARKET HIT [%s]: %s #%s — %.4f %s",
-                        listing.marketplace,
-                        listing.gift_name,
-                        listing.gift_number or "?",
-                        listing.price,
-                        listing.currency,
+                if not _warmed_up:
+                    continue
+
+                matched_target = _match_listing_to_target(listing, current_targets)
+                if not matched_target:
+                    continue
+
+                logger.info(
+                    "MARKET HIT [%s]: %s #%s — %.4f %s",
+                    listing.marketplace,
+                    listing.gift_name,
+                    listing.gift_number or "?",
+                    listing.price,
+                    listing.currency,
+                )
+
+                buy_result = ""
+                if _auto_buy_enabled and listing.raw_id:
+                    ok = False
+                    if listing.marketplace == "MRKT" and mrkt_token:
+                        ok = await _buy_mrkt(client, listing, mrkt_token)
+                    elif listing.marketplace == "Portals" and portals_token:
+                        ok = await _buy_portals(client, listing, portals_token)
+                    buy_result = "\n✅ Куплено!" if ok else "\n❌ Покупка не удалась"
+
+                if notify_fn:
+                    model_info = f"\nМодель: {listing.model}" if listing.model else ""
+                    num = f" #{listing.gift_number}" if listing.gift_number else ""
+                    link = f"\n🔗 {listing.url}" if listing.url else ""
+                    seen = f"\n🕐 Обнаружено: {_now_msk()} МСК"
+                    msg = (
+                        f"📍 {listing.marketplace}\n"
+                        f"🎯 {listing.gift_name}{num}\n"
+                        f"Цена: {listing.price:.4f} {listing.currency} "
+                        f"(макс {matched_target.max_price})"
+                        f"{model_info}"
+                        f"{seen}"
+                        f"{link}"
+                        f"{buy_result}"
                     )
-
-                    buy_result = ""
-                    if _auto_buy_enabled and listing.raw_id:
-                        ok = False
-                        if listing.marketplace == "MRKT" and mrkt_token:
-                            ok = await _buy_mrkt(client, listing, mrkt_token)
-                        elif listing.marketplace == "Portals" and portals_token:
-                            ok = await _buy_portals(client, listing, portals_token)
-                        buy_result = "\n✅ Куплено!" if ok else "\n❌ Покупка не удалась"
-
-                    if notify_fn:
-                        model_info = f"\nМодель: {listing.model}" if listing.model else ""
-                        num = f" #{listing.gift_number}" if listing.gift_number else ""
-                        link = f"\n🔗 {listing.url}" if listing.url else ""
-                        seen = f"\n🕐 Обнаружено: {_now_msk()} МСК"
-                        msg = (
-                            f"📍 {listing.marketplace}\n"
-                            f"🎯 {listing.gift_name}{num}\n"
-                            f"Цена: {listing.price:.4f} {listing.currency} "
-                            f"(макс {target.max_price})"
-                            f"{model_info}"
-                            f"{seen}"
-                            f"{link}"
-                            f"{buy_result}"
-                        )
-                        try:
-                            await notify_fn(msg)
-                        except Exception:
-                            logger.exception("Failed to send market notification")
+                    try:
+                        await notify_fn(msg)
+                    except Exception:
+                        logger.exception("Failed to send market notification")
 
             if not _warmed_up:
                 _warmed_up = True
