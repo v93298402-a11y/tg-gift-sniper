@@ -17,6 +17,9 @@ from sniper.list_gifts import list_gifts, list_models
 from sniper.markets import MarketTarget as MktTarget
 from sniper.markets import run_market_monitor
 from sniper.poller import get_stats, run_loop
+from sniper.whale_feed import get_stats as get_whale_stats
+from sniper.whale_feed import run_whale_feed
+from sniper.whale_poster import create_whale_poster
 
 logger = logging.getLogger("sniper")
 
@@ -50,6 +53,48 @@ async def _list_models(gift_id: int) -> None:
     await client.start()
     await list_models(client, gift_id)
     await client.disconnect()
+
+
+async def _run_whale(threshold_ton: float) -> None:
+    """Run only the whale-feed monitor (no sniper, no market polling)."""
+    from dotenv import load_dotenv
+
+    load_dotenv()
+    bot_token = os.getenv("WHALE_BOT_TOKEN", "").strip()
+    channel = os.getenv("WHALE_CHANNEL", "").strip()
+    if not bot_token:
+        logger.error("WHALE_BOT_TOKEN not set in .env — cannot start whale feed")
+        sys.exit(1)
+    if not channel:
+        logger.error("WHALE_CHANNEL not set in .env — cannot start whale feed")
+        sys.exit(1)
+
+    client = _make_client()
+    logger.info("Connecting to Telegram for whale feed…")
+    await client.start()
+    me = await client.get_me()
+    logger.info("Logged in as %s (id=%d)", me.first_name, me.id)
+
+    poster = create_whale_poster(bot_token=bot_token, channel=channel)
+    logger.info("Whale poster ready: channel=%s, threshold=%.1f TON", channel, threshold_ton)
+
+    loop = asyncio.get_running_loop()
+
+    def _shutdown() -> None:
+        logger.info("Whale feed shutting down… stats=%s", get_whale_stats())
+        for task in asyncio.all_tasks(loop):
+            task.cancel()
+
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        loop.add_signal_handler(sig, _shutdown)
+
+    try:
+        await run_whale_feed(client, on_sold=poster, threshold_ton=threshold_ton)
+    except asyncio.CancelledError:
+        pass
+    finally:
+        await client.disconnect()
+        logger.info("Whale feed disconnected. Final stats: %s", get_whale_stats())
 
 
 async def _run(cfg: Config, bot_mode: bool = False, self_mode: bool = False) -> None:
@@ -225,6 +270,17 @@ def main() -> None:
         dest="self_mode",
         help="Manage targets via Saved Messages (no separate bot needed)",
     )
+    parser.add_argument(
+        "--whale",
+        action="store_true",
+        help="Run only the whale-feed monitor (sales \u2265 threshold posted to channel)",
+    )
+    parser.add_argument(
+        "--whale-threshold",
+        type=float,
+        default=100.0,
+        help="Minimum TON price to consider a sale 'whale' (default: 100.0)",
+    )
     args = parser.parse_args()
 
     if args.list_gifts:
@@ -235,6 +291,15 @@ def main() -> None:
     if args.list_models:
         _setup_logging("INFO")
         asyncio.run(_list_models(args.list_models))
+        return
+
+    if args.whale:
+        _setup_logging("INFO")
+        try:
+            asyncio.run(_run_whale(threshold_ton=args.whale_threshold))
+        except KeyboardInterrupt:
+            logger.info("Whale feed interrupted.")
+            sys.exit(0)
         return
 
     cfg = Config.load(args.config)
