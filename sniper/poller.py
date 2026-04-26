@@ -96,6 +96,33 @@ def _gift_matches_filter(gift: types.StarGiftUnique, target: TargetGift) -> bool
     return False
 
 
+# Adaptive per-collection request gap. Baseline 2.0s keeps Telegram happy in
+# the common case; when a FloodWait fires we bump the gap and slowly decay it
+# back to baseline over subsequent cycles.
+_PER_COLLECTION_GAP_MIN = 2.0
+_PER_COLLECTION_GAP_MAX = 10.0
+_PER_COLLECTION_GAP_DECAY = 0.2
+_per_collection_gap = _PER_COLLECTION_GAP_MIN
+
+
+def _bump_gap_on_flood(flood_seconds: int) -> None:
+    """Increase the per-collection gap after a FloodWait, capped at max."""
+    global _per_collection_gap
+    # Use roughly 1/5 of the observed flood wait plus a small constant, so a
+    # 39s flood bumps the gap by ~8s; cap at max.
+    bump = flood_seconds / 5.0 + 0.5
+    _per_collection_gap = min(_PER_COLLECTION_GAP_MAX, _per_collection_gap + bump)
+
+
+def _decay_gap() -> None:
+    """Relax the per-collection gap back toward the baseline after quiet cycles."""
+    global _per_collection_gap
+    if _per_collection_gap > _PER_COLLECTION_GAP_MIN:
+        _per_collection_gap = max(
+            _PER_COLLECTION_GAP_MIN, _per_collection_gap - _PER_COLLECTION_GAP_DECAY
+        )
+
+
 async def _poll_gift_id(
     client: TelegramClient,
     gift_id: int,
@@ -114,10 +141,12 @@ async def _poll_gift_id(
         )
     except FloodWaitError as e:
         _stats["flood_waits"] += 1
+        _bump_gap_on_flood(e.seconds)
         logger.warning(
-            "FLOOD_WAIT %ds on gift_id=%d, sleeping…",
+            "FLOOD_WAIT %ds on gift_id=%d, sleeping and raising gap to %.1fs…",
             e.seconds,
             gift_id,
+            _per_collection_gap,
         )
         await asyncio.sleep(e.seconds + 1)
         return
@@ -316,14 +345,15 @@ async def run_loop(
             by_gift[target.gift_id].append(target)
 
         # Space requests out so Telegram's per-method rate limiter doesn't
-        # emit FloodWait. Production logs showed ~4 FloodWaits/min when all
-        # gift_ids were polled back-to-back.
-        _PER_COLLECTION_GAP = 1.0
+        # emit FloodWait. Gap is adaptive — bumps up on FloodWait, decays
+        # back toward _PER_COLLECTION_GAP_MIN during quiet cycles.
         gift_items = list(by_gift.items())
         for i, (gift_id, targets) in enumerate(gift_items):
             if i > 0:
-                await asyncio.sleep(_PER_COLLECTION_GAP)
+                await asyncio.sleep(_per_collection_gap)
             await _poll_gift_id(client, gift_id, targets, cfg)
+
+        _decay_gap()
 
         if not _warmed_up:
             _warmed_up = True
