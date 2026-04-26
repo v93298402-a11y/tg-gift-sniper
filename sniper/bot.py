@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from pathlib import Path
@@ -1155,15 +1156,31 @@ def build_application(bot_token: str, owner_id: int | None = None) -> Applicatio
 
 
 def create_notifier(bot_token: str, chat_id: int):
-    """Create an async notification function that sends via Bot API."""
+    """Create an async notification function that sends via Bot API.
+
+    Notifications are throttled to at most 1 message per second per chat to
+    stay within Telegram's bot anti-spam limits. Without this, a burst of
+    new-listing messages can trip Telegram's automatic bot deletion.
+    """
     from telegram import Bot
 
     bot = Bot(token=bot_token)
+    lock = asyncio.Lock()
+    state = {"last_sent": 0.0}
+    _MIN_INTERVAL = 1.1  # seconds between messages to the same chat
 
     async def notify(text: str) -> None:
         if not _notifications_enabled:
             return
-        await bot.send_message(chat_id=chat_id, text=text)
+        async with lock:
+            now = asyncio.get_event_loop().time()
+            wait = _MIN_INTERVAL - (now - state["last_sent"])
+            if wait > 0:
+                await asyncio.sleep(wait)
+            try:
+                await bot.send_message(chat_id=chat_id, text=text)
+            finally:
+                state["last_sent"] = asyncio.get_event_loop().time()
 
     return notify
 
