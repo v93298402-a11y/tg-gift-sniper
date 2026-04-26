@@ -315,7 +315,14 @@ async def run_loop(
         for target in all_targets:
             by_gift[target.gift_id].append(target)
 
-        for gift_id, targets in by_gift.items():
+        # Space requests out so Telegram's per-method rate limiter doesn't
+        # emit FloodWait. Production logs showed ~4 FloodWaits/min when all
+        # gift_ids were polled back-to-back.
+        _PER_COLLECTION_GAP = 1.0
+        gift_items = list(by_gift.items())
+        for i, (gift_id, targets) in enumerate(gift_items):
+            if i > 0:
+                await asyncio.sleep(_PER_COLLECTION_GAP)
             await _poll_gift_id(client, gift_id, targets, cfg)
 
         if not _warmed_up:
