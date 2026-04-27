@@ -1,134 +1,117 @@
 """Whale-feed source for MRKT (tgmrkt.io) Telegram-gift sales.
 
-MRKT exposes a public POST endpoint used by their own web Mini-App at
-``cdn.tgmrkt.io`` to list the latest marketplace events ("Latest" feed).
-The endpoint returns recent sales / listings / etc. across all
-collections. We poll it every ``POLL_INTERVAL_SEC`` seconds and forward
-every confirmed sale at or above ``threshold_ton`` to ``on_sold``.
+This source is a *Telethon channel scraper*, not an HTTP API client.
 
-Endpoint: ``POST https://api.tgmrkt.io/api/v1/feed``
+MRKT operates an official "Real-Time Sales" notification channel at
+``@mrktnotification`` (linked from the main ``@official_mrkt`` channel
+description). Every gift sale on the marketplace produces a single
+post in this channel within seconds. The post format is::
 
-Body::
+    ⚡ Gift Sold
 
-    {"count": 50,
-     "cursor": "",
-     "collectionNames": [], "modelNames": [], "backdropNames": [],
-     "number": null, "type": [],
-     "minPrice": null, "maxPrice": null,
-     "ordering": "Latest", "lowToHigh": false, "query": null}
+    Jack-in-the-Box #11960
 
-Response (abbreviated)::
+    - Model: Super Block (3%)
+    - Symbol: Valkyrie (%)
+    - Backdrop: Moonstone (%)
 
-    {"items": [
-       {"type": "sale",
-        "id": "<uuid>",
-        "amount": 3960000000,           # nano-TON
-        "date": "2026-04-27T09:37:28.834486Z",
-        "gift": {
-           "name": "BDayCandle-209935", # already-CamelCase slug
-           "title": "B-Day Candle",
-           "collectionName": "B-Day Candle",
-           "number": 209935,
-           "modelName": "Broadway",
-           "backdropName": "Mint Green",
-           "symbolName": "Plume",
-           "salePrice": 3960000000,
-           ...
-        }
-       },
-       …
-    ]}
+    😋Price: 3.21 TON
 
-Authorization IS required — pass an ``Authorization`` header with the
-JWT obtained via :func:`sniper.auth.get_mrkt_token` (Chrome's HAR export
-silently strips this header for security; the OPTIONS preflight in the
-HAR confirms the real request includes it).
+    [forwarded NFT preview]
+    [inline button: "Check it on MRKT"]
 
-On a 401/403 the caller's ``refresh_token`` coroutine is invoked to
-mint a fresh token, then the request is retried once.
+…or sometimes a single-line variant for pinned / promoted whales::
+
+    ⚡ Gift Sold  Scared Cat #11554  - Model: Puss in Boots (4%) -
+    Symbol: Blood Drop (%) - Backdrop: Azure Blue (%) 😋 Price: 142.97 TON
+
+We previously polled MRKT's ``/api/v1/feed`` HTTP endpoint, but it sits
+behind a Cloudflare WAF rule that returns 401 to every request from
+non-residential IPs (verified across direct httpx, curl_cffi with
+Chrome TLS fingerprint, HTTP/2, with/without our Telethon-issued auth
+token, with/without browser-like Origin/Referer/sec-* headers). The
+WAF rule cannot be bypassed without a residential proxy, so we instead
+read the same data from the marketplace's own Telegram channel using
+the existing Telethon session.
+
+Advantages of the channel-scraper approach:
+
+* No HTTP auth, no proxy, no Cloudflare hassle.
+* Real-time: posts arrive ≤1s after each sale.
+* Uses the Telethon client we already have.
+
+Disadvantages:
+
+* Tied to MRKT's chosen post format; if they reword posts the parser
+  must follow. The format has been stable for months, but a fallback
+  log path is included so format drift surfaces immediately.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from collections.abc import Awaitable, Callable
-from datetime import datetime, timedelta, timezone
+from typing import TYPE_CHECKING
 
-import httpx
+from telethon import events
+from telethon.errors import FloodWaitError
 
-from sniper.whale_types import WhaleSale
+from sniper.whale_enrich import enrich_attributes
+from sniper.whale_types import WhaleSale, derive_slug
+
+if TYPE_CHECKING:
+    from telethon import TelegramClient
 
 logger = logging.getLogger(__name__)
 
 
-MRKT_API_BASE = "https://api.tgmrkt.io"
-FEED_PATH = "/api/v1/feed"
 GIFT_THRESHOLD_TON = 100.0
-POLL_INTERVAL_SEC = 60.0
-HTTP_TIMEOUT_SEC = 20.0
-NANO_PER_TON = 1_000_000_000
-SEEN_BUFFER = 1000
-# Skip events older than this — guards against the feed reshuffling
-# stale rows for any reason. Genuine sales appear within a minute or
-# two; six hours is generous.
-MAX_SALE_AGE = timedelta(hours=6)
+MRKT_CHANNEL = "mrktnotification"
 
-# Body shape mirrors what the MRKT Mini-App sends (captured via HAR):
-#   type=["Sale"]   server-side filter — return ONLY purchase events,
-#                  not listings/de-listings/etc. Without it the server
-#                  may reject the request or return a mixed feed.
-#   count=20       Mini-App default; larger values may be capped or
-#                  trigger anti-abuse 401s.
-#   cursor=""      empty cursor = newest page; subsequent pages would
-#                  pass the previous response's nextCursor.
-_REQUEST_BODY = {
-    "count": 20,
-    "cursor": "",
-    "collectionNames": [],
-    "modelNames": [],
-    "backdropNames": [],
-    "number": None,
-    "type": ["Sale"],
-    "minPrice": None,
-    "maxPrice": None,
-    "ordering": "Latest",
-    "lowToHigh": False,
-    "query": None,
-}
+_GIFT_SOLD_ANCHOR = "Gift Sold"
 
-# Headers mirror exactly what the Mini-App sends. Cloudflare in front
-# of api.tgmrkt.io appears to fingerprint the sec-fetch-* combination,
-# so dropping any of these can flip the response to 401.
-_BASE_HEADERS = {
-    "Accept": "application/json, text/plain, */*",
-    "Accept-Language": "en-US,en;q=0.9",
-    "Content-Type": "application/json",
-    "Origin": "https://cdn.tgmrkt.io",
-    "Referer": "https://cdn.tgmrkt.io/",
-    "Sec-Ch-Ua": (
-        '"Not(A:Brand";v="8", "Chromium";v="144", "Google Chrome";v="144"'
-    ),
-    "Sec-Ch-Ua-Mobile": "?0",
-    "Sec-Ch-Ua-Platform": '"Windows"',
-    "Sec-Fetch-Dest": "empty",
-    "Sec-Fetch-Mode": "cors",
-    "Sec-Fetch-Site": "same-site",
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36"
-    ),
-}
+# "Title #12345" — accepts letters, digits, spaces, hyphens, apostrophes,
+# dots in the title. Matches first occurrence after "Gift Sold".
+_TITLE_RE = re.compile(
+    r"([A-Za-z][A-Za-z0-9 .'\-]*?)\s*#\s*(\d+)",
+)
+# "Price: 142.97 TON" or "😋Price:142.97 TON". Tolerates missing/extra
+# whitespace and stray emoji directly preceding "Price".
+_PRICE_RE = re.compile(
+    r"Price\s*:?\s*([\d]+(?:[.,]\d+)?)\s*TON",
+    re.IGNORECASE,
+)
+# "Model: Super Block (3%)" — capture everything between the keyword
+# and the next attribute boundary, then strip ``(rarity)`` and trailing
+# punctuation in :func:`_clean_attr`. Single-line whale posts bunch
+# attributes on one line separated by " - ", so we stop at the next
+# attribute keyword or the price-emoji rather than relying on \n.
+_ATTR_BOUNDARY = (
+    r"(?=\s*(?:-\s*(?:Model|Symbol|Backdrop)|Price|😋|\n|$))"
+)
+_MODEL_RE = re.compile(
+    rf"Model\s*:\s*(.+?){_ATTR_BOUNDARY}",
+    re.IGNORECASE | re.DOTALL,
+)
+_SYMBOL_RE = re.compile(
+    rf"Symbol\s*:\s*(.+?){_ATTR_BOUNDARY}",
+    re.IGNORECASE | re.DOTALL,
+)
+_BACKDROP_RE = re.compile(
+    rf"Backdrop\s*:\s*(.+?){_ATTR_BOUNDARY}",
+    re.IGNORECASE | re.DOTALL,
+)
+_RARITY_PAREN_RE = re.compile(r"\s*\([^)]*\)\s*$")
 
 
 _stats: dict[str, int] = {
-    "polls": 0,
-    "items_seen": 0,
-    "sales_seen": 0,
+    "messages_seen": 0,
+    "sales_parsed": 0,
     "whales_emitted": 0,
-    "stale_filtered": 0,
-    "errors": 0,
-    "auth_refreshes": 0,
+    "parse_errors": 0,
+    "below_threshold": 0,
 }
 
 
@@ -136,242 +119,158 @@ def get_stats() -> dict[str, int]:
     return dict(_stats)
 
 
-def _parse_iso_ts(ts: str) -> datetime | None:
-    if not ts:
+def _clean_attr(s: str | None) -> str | None:
+    """Tidy an attribute capture: drop trailing rarity, dashes, emoji."""
+    if s is None:
         return None
-    # MRKT timestamps end in 'Z' which fromisoformat accepts on 3.11+
+    s = s.strip()
+    s = _RARITY_PAREN_RE.sub("", s)
+    s = s.strip(" -·.,;:")
+    return s or None
+
+
+def parse_sale_message(text: str) -> WhaleSale | None:
+    """Parse one MRKT notification post into a :class:`WhaleSale`.
+
+    Returns ``None`` if the message is not a recognised "Gift Sold"
+    post. Only the price field is mandatory; if other fields are
+    missing they're left as ``None`` and the poster will degrade
+    gracefully.
+    """
+    if not text:
+        return None
+    if _GIFT_SOLD_ANCHOR not in text:
+        return None
+
+    # Trim everything before the anchor so a stray "#12345" earlier in
+    # the message (e.g. quoted source post) can't fool _TITLE_RE.
+    body = text[text.index(_GIFT_SOLD_ANCHOR) + len(_GIFT_SOLD_ANCHOR):]
+
+    title_match = _TITLE_RE.search(body)
+    if not title_match:
+        return None
+    title = title_match.group(1).strip()
     try:
-        return datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        num = int(title_match.group(2))
     except ValueError:
         return None
+    full_title = f"{title} #{num}"
+    slug, collection_title, _ = derive_slug(full_title)
 
-
-def _to_sale(item: dict) -> WhaleSale | None:
-    """Convert one MRKT feed item to a WhaleSale, or ``None`` to skip."""
-    if item.get("type") != "sale":
+    price_match = _PRICE_RE.search(body)
+    if not price_match:
         return None
-
-    amount_nano = item.get("amount")
-    if amount_nano is None:
-        return None
+    raw_price = price_match.group(1).replace(",", ".")
     try:
-        price_ton = float(amount_nano) / NANO_PER_TON
-    except (TypeError, ValueError):
+        price_ton = float(raw_price)
+    except ValueError:
         return None
     if price_ton <= 0:
         return None
 
-    gift = item.get("gift") or {}
-    slug = gift.get("name")  # already CamelCase like "BDayCandle-209935"
-    title_full = gift.get("title")
-    number = gift.get("number")
-    if not slug or title_full is None or number is None:
-        return None
+    model_match = _MODEL_RE.search(body)
+    symbol_match = _SYMBOL_RE.search(body)
+    backdrop_match = _BACKDROP_RE.search(body)
 
-    full_title = f"{title_full} #{number}"
     return WhaleSale(
         source="MRKT",
         title=full_title,
         price_ton=price_ton,
-        collection_title=gift.get("collectionName") or title_full,
-        num=number,
+        collection_title=collection_title or title,
+        num=num,
         slug=slug,
-        model=gift.get("modelName"),
-        backdrop=gift.get("backdropName"),
-        symbol=gift.get("symbolName"),
+        model=_clean_attr(model_match.group(1)) if model_match else None,
+        symbol=_clean_attr(symbol_match.group(1)) if symbol_match else None,
+        backdrop=_clean_attr(backdrop_match.group(1)) if backdrop_match else None,
         nft_address=None,
         seller_address=None,
         buyer_address=None,
     )
 
 
-class _AuthError(Exception):
-    pass
-
-
-async def _fetch_feed(client: httpx.AsyncClient, token: str) -> list[dict]:
-    url = MRKT_API_BASE + FEED_PATH
-    headers = dict(_BASE_HEADERS)
-    # The Mini-App does NOT send an Authorization header to /feed — the
-    # endpoint is publicly readable from the right Origin/Referer.
-    # Sending our /api/v1/auth UUID actually flips the response to 401
-    # (likely treated as an invalid bearer). The ``token`` argument is
-    # kept in the signature for API-symmetry with run_mrkt_feed but is
-    # intentionally unused here.
-    _ = token
-    resp = await client.post(url, json=_REQUEST_BODY, headers=headers)
-    if resp.status_code in (401, 403):
-        body = resp.text[:200] if resp.text else "<empty>"
-        logger.warning(
-            "MRKT /feed %d: body=%r",
-            resp.status_code,
-            body,
-        )
-        raise _AuthError(f"MRKT auth error {resp.status_code}")
-    resp.raise_for_status()
-    data = resp.json()
-    return list(data.get("items", []))
-
-
 async def run_mrkt_feed(
+    client: TelegramClient,
     on_sold: Callable[[WhaleSale], Awaitable[None]],
-    initial_token: str,
-    refresh_token: Callable[[], Awaitable[str]] | None = None,
     threshold_ton: float = GIFT_THRESHOLD_TON,
-    poll_interval_sec: float = POLL_INTERVAL_SEC,
+    channel: str = MRKT_CHANNEL,
 ) -> None:
-    """Main loop: poll MRKT's Latest feed and forward whales to ``on_sold``.
+    """Subscribe to ``@mrktnotification`` via Telethon and forward whales.
 
-    ``initial_token`` should be a freshly minted JWT from
-    :func:`sniper.auth.get_mrkt_token`. ``refresh_token`` is called if
-    the server replies 401/403 (typical when the token expires after
-    a few hours); the returned new token replaces the cached one.
+    Runs forever. Resolves the channel entity once on startup, then
+    registers a NewMessage handler scoped to that channel. The handler
+    parses each post; sales at or above ``threshold_ton`` are forwarded
+    to ``on_sold``.
+
+    The Telethon client must already be connected and authorised
+    (i.e. the same client used by the rest of whale-feed). If the
+    bound account isn't a member of the channel, this function logs
+    a warning and returns — the channel is public, so a one-time
+    join from any Telegram client is sufficient.
     """
-    seen_ids: set[str] = set()
-    bootstrap_done = False
-    token = initial_token
-    # MRKT's /feed sits behind a Cloudflare WAF rule that 401s every
-    # request from non-residential IPs, regardless of headers / TLS
-    # fingerprint / token. After this many consecutive 401s we stop
-    # polling entirely (silent suspend) — the source then sleeps in a
-    # long loop so the rest of whale-feed isn't slowed by retries.
-    # MRKT sales are still picked up by the on-chain Getgems source.
-    AUTH_FAIL_LIMIT = 5
-    SUSPEND_SLEEP_SEC = 3600.0
-    consecutive_auth_fails = 0
-    suspended = False
+    try:
+        entity = await client.get_entity(channel)
+    except FloodWaitError as e:
+        logger.warning(
+            "MRKT: FloodWait %ds resolving @%s; aborting source.",
+            e.seconds,
+            channel,
+        )
+        return
+    except Exception:
+        logger.exception(
+            "MRKT: failed to resolve @%s — is the account subscribed?",
+            channel,
+        )
+        return
 
     logger.info(
-        "MRKT feed starting: threshold=%.1f TON, poll=%.1fs, token_present=%s",
+        "MRKT feed starting: channel=@%s threshold=%.1f TON",
+        channel,
         threshold_ton,
-        poll_interval_sec,
-        bool(token),
     )
 
-    backoff = poll_interval_sec
-    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT_SEC) as client:
-        while True:
-            if suspended:
-                # Long sleep, no API calls. Wake every hour just in case
-                # the WAF rule changes; one /feed attempt — if it works,
-                # un-suspend and resume normal polling.
-                await asyncio.sleep(SUSPEND_SLEEP_SEC)
-                try:
-                    items = await _fetch_feed(client, token)
-                except _AuthError:
-                    continue
-                except Exception:
-                    continue
-                logger.info(
-                    "MRKT feed back online after suspend — resuming.",
-                )
-                suspended = False
-                consecutive_auth_fails = 0
-                # fall through into normal processing path with `items`
-            else:
-                try:
-                    items = await _fetch_feed(client, token)
-                except _AuthError:
-                    consecutive_auth_fails += 1
-                    if consecutive_auth_fails >= AUTH_FAIL_LIMIT:
-                        logger.warning(
-                            "MRKT /feed has 401'd %d times in a row — "
-                            "Cloudflare/WAF appears to block this IP. "
-                            "Suspending MRKT polling. Sales will still "
-                            "be captured via the Getgems on-chain "
-                            "source.",
-                            consecutive_auth_fails,
-                        )
-                        suspended = True
-                        continue
-                    if refresh_token is None:
-                        _stats["errors"] += 1
-                        await asyncio.sleep(poll_interval_sec)
-                        continue
-                    try:
-                        new_tok = await refresh_token()
-                    except Exception:
-                        logger.exception("MRKT token refresh failed")
-                        new_tok = ""
-                    if new_tok:
-                        token = new_tok
-                        _stats["auth_refreshes"] += 1
-                    else:
-                        _stats["errors"] += 1
-                    await asyncio.sleep(poll_interval_sec)
-                    continue
-                except Exception:
-                    _stats["errors"] += 1
-                    logger.exception("MRKT feed HTTP error")
-                    await asyncio.sleep(min(backoff * 2, 300.0))
-                    backoff = min(backoff * 2, 300.0)
-                    continue
-            # Successful response — reset backoff & auth-fail counter.
-            consecutive_auth_fails = 0
-            backoff = poll_interval_sec
-            _stats["polls"] += 1
-            _stats["items_seen"] += len(items)
+    @client.on(events.NewMessage(chats=entity))
+    async def _on_new_post(event):  # noqa: ANN001
+        _stats["messages_seen"] += 1
+        text = event.message.message or ""
+        try:
+            sale = parse_sale_message(text)
+        except Exception:
+            _stats["parse_errors"] += 1
+            logger.exception("MRKT: parser crashed on message %s", event.id)
+            return
+        if sale is None:
+            return
+        _stats["sales_parsed"] += 1
+        if sale.price_ton < threshold_ton:
+            _stats["below_threshold"] += 1
+            return
 
-            if not bootstrap_done:
-                # Mark every visible item id as seen on first poll so we
-                # don't replay history.
-                for it in items:
-                    iid = it.get("id")
-                    if iid:
-                        seen_ids.add(iid)
-                bootstrap_done = True
-                logger.info(
-                    "MRKT bootstrap: marked %d existing feed items as seen.",
-                    len(items),
-                )
-                await asyncio.sleep(poll_interval_sec)
-                continue
+        # Backfill any missing attributes (rare for MRKT — their posts
+        # usually carry Model/Symbol/Backdrop — but cheap insurance
+        # against format drift).
+        if not (sale.model and sale.symbol and sale.backdrop):
+            try:
+                await enrich_attributes(client, sale)
+            except Exception:
+                logger.exception("MRKT: enrich raised, posting partial sale")
 
-            now = datetime.now(timezone.utc)
-            new_whales: list[WhaleSale] = []
-            for it in items:
-                iid = it.get("id")
-                if not iid or iid in seen_ids:
-                    continue
-                seen_ids.add(iid)
+        _stats["whales_emitted"] += 1
+        logger.info(
+            "MRKT whale: %s @ %.2f TON (model=%s sym=%s bd=%s)",
+            sale.title,
+            sale.price_ton,
+            sale.model,
+            sale.symbol,
+            sale.backdrop,
+        )
+        try:
+            await on_sold(sale)
+        except Exception:
+            logger.exception("MRKT: on_sold callback raised")
 
-                if it.get("type") != "sale":
-                    continue
-                _stats["sales_seen"] += 1
-
-                # Freshness filter
-                dt = _parse_iso_ts(it.get("date", ""))
-                if dt is not None and (now - dt) > MAX_SALE_AGE:
-                    _stats["stale_filtered"] += 1
-                    continue
-
-                sale = _to_sale(it)
-                if sale is None:
-                    continue
-                if sale.price_ton < threshold_ton:
-                    continue
-                new_whales.append(sale)
-
-            # Bound dedup memory
-            if len(seen_ids) > SEEN_BUFFER:
-                fresh = {it.get("id") for it in items if it.get("id")}
-                seen_ids = fresh | set(list(seen_ids)[-SEEN_BUFFER:])
-
-            # Feed is newest-first; emit oldest-first so posts arrive in
-            # chronological order.
-            for sale in reversed(new_whales):
-                _stats["whales_emitted"] += 1
-                logger.info(
-                    "MRKT whale sale: %s @ %.2f TON",
-                    sale.title,
-                    sale.price_ton,
-                )
-                try:
-                    await on_sold(sale)
-                except Exception:
-                    logger.exception(
-                        "on_sold callback failed for MRKT sale %s",
-                        sale.title,
-                    )
-
-            await asyncio.sleep(poll_interval_sec)
+    # Keep the wrapping task alive forever — the registered handler
+    # runs on the client's main loop regardless of this coroutine's
+    # state. Using an Event that's never set is cleaner than calling
+    # run_until_disconnected from each source independently.
+    await asyncio.Event().wait()

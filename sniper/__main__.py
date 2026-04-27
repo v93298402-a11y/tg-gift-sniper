@@ -28,6 +28,8 @@ from sniper.whale_mrkt import run_mrkt_feed
 from sniper.whale_portals import get_stats as get_portals_stats
 from sniper.whale_portals import run_portals_feed
 from sniper.whale_poster import create_whale_poster
+from sniper.whale_tonnel import get_stats as get_tonnel_stats
+from sniper.whale_tonnel import run_tonnel_feed
 
 logger = logging.getLogger("sniper")
 
@@ -72,6 +74,7 @@ async def _run_whale(threshold_ton: float) -> None:
       * Fragment — enabled by default; disable with WHALE_FRAGMENT_ENABLED=0.
       * MRKT     — enabled by default; disable with WHALE_MRKT_ENABLED=0.
       * Portals  — enabled by default; disable with WHALE_PORTALS_ENABLED=0.
+      * Tonnel   — enabled by default; disable with WHALE_TONNEL_ENABLED=0.
     """
     from dotenv import load_dotenv
 
@@ -82,6 +85,7 @@ async def _run_whale(threshold_ton: float) -> None:
     fragment_enabled = os.getenv("WHALE_FRAGMENT_ENABLED", "1").strip() != "0"
     mrkt_enabled = os.getenv("WHALE_MRKT_ENABLED", "1").strip() != "0"
     portals_enabled = os.getenv("WHALE_PORTALS_ENABLED", "1").strip() != "0"
+    tonnel_enabled = os.getenv("WHALE_TONNEL_ENABLED", "1").strip() != "0"
     if not bot_token:
         logger.error("WHALE_BOT_TOKEN not set in .env — cannot start whale feed")
         sys.exit(1)
@@ -107,12 +111,13 @@ async def _run_whale(threshold_ton: float) -> None:
     def _shutdown() -> None:
         logger.info(
             "Whale feed shutting down… telegram=%s getgems=%s fragment=%s "
-            "mrkt=%s portals=%s",
+            "mrkt=%s portals=%s tonnel=%s",
             get_whale_stats(),
             get_getgems_stats(),
             get_fragment_stats(),
             get_mrkt_stats(),
             get_portals_stats(),
+            get_tonnel_stats(),
         )
         for task in asyncio.all_tasks(loop):
             task.cancel()
@@ -161,29 +166,19 @@ async def _run_whale(threshold_ton: float) -> None:
         )
 
     if mrkt_enabled:
-        logger.info("MRKT source: fetching auth token via Telethon WebView…")
-        mrkt_token = await get_mrkt_token(client)
-
-        async def _refresh_mrkt() -> str:
-            return await get_mrkt_token(client)
-
-        if mrkt_token:
-            logger.info("MRKT source enabled (token obtained).")
-            tasks.append(
-                asyncio.create_task(
-                    run_mrkt_feed(
-                        on_sold=poster,
-                        initial_token=mrkt_token,
-                        refresh_token=_refresh_mrkt,
-                        threshold_ton=threshold_ton,
-                    ),
-                    name="whale-mrkt",
-                )
+        logger.info(
+            "MRKT source enabled (Telethon channel scraper @mrktnotification).",
+        )
+        tasks.append(
+            asyncio.create_task(
+                run_mrkt_feed(
+                    client=client,
+                    on_sold=poster,
+                    threshold_ton=threshold_ton,
+                ),
+                name="whale-mrkt",
             )
-        else:
-            logger.warning(
-                "MRKT source disabled — failed to obtain auth token at startup.",
-            )
+        )
     else:
         logger.info(
             "MRKT source disabled (WHALE_MRKT_ENABLED=0).",
@@ -218,6 +213,25 @@ async def _run_whale(threshold_ton: float) -> None:
             "Portals source disabled (WHALE_PORTALS_ENABLED=0).",
         )
 
+    if tonnel_enabled:
+        logger.info(
+            "Tonnel source enabled (Telethon channel scraper @GiftNotification).",
+        )
+        tasks.append(
+            asyncio.create_task(
+                run_tonnel_feed(
+                    client=client,
+                    on_sold=poster,
+                    threshold_ton=threshold_ton,
+                ),
+                name="whale-tonnel",
+            )
+        )
+    else:
+        logger.info(
+            "Tonnel source disabled (WHALE_TONNEL_ENABLED=0).",
+        )
+
     try:
         await asyncio.gather(*tasks)
     except asyncio.CancelledError:
@@ -225,10 +239,14 @@ async def _run_whale(threshold_ton: float) -> None:
     finally:
         await client.disconnect()
         logger.info(
-            "Whale feed disconnected. Final stats: telegram=%s getgems=%s fragment=%s",
+            "Whale feed disconnected. Final stats: telegram=%s getgems=%s "
+            "fragment=%s mrkt=%s portals=%s tonnel=%s",
             get_whale_stats(),
             get_getgems_stats(),
             get_fragment_stats(),
+            get_mrkt_stats(),
+            get_portals_stats(),
+            get_tonnel_stats(),
         )
 
 
