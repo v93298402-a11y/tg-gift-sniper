@@ -38,9 +38,12 @@ class WhaleSale:
     nft_address: str | None = None  # TON address (for Getgems/blockchain sources)
     seller_address: str | None = None
     buyer_address: str | None = None
+    marketplace_url: str | None = None  # explicit link override (e.g. fragment.com)
 
     @property
     def link(self) -> str:
+        if self.marketplace_url:
+            return self.marketplace_url
         if self.slug:
             return f"https://t.me/nft/{self.slug}"
         if self.nft_address:
@@ -53,9 +56,11 @@ class WhaleSale:
 
         Two sources reporting the same sale will likely agree on slug (or
         nft_address) and price, so we key on that. Price is rounded to
-        whole TON to absorb tiny rounding differences between data sources.
+        whole TON to absorb tiny rounding differences between data sources,
+        and the slug is lowercased so e.g. ``plushpepe-1821`` (Fragment)
+        matches ``PlushPepe-1821`` (Getgems / Telegram).
         """
-        ident = self.slug or self.nft_address or self.title
+        ident = (self.slug or self.nft_address or self.title or "").lower()
         return f"{ident}:{int(round(self.price_ton))}"
 
 

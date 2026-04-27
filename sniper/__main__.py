@@ -19,6 +19,8 @@ from sniper.markets import run_market_monitor
 from sniper.poller import get_stats, run_loop
 from sniper.whale_feed import get_stats as get_whale_stats
 from sniper.whale_feed import run_whale_feed
+from sniper.whale_fragment import get_stats as get_fragment_stats
+from sniper.whale_fragment import run_fragment_feed
 from sniper.whale_getgems import get_stats as get_getgems_stats
 from sniper.whale_getgems import run_getgems_feed
 from sniper.whale_poster import create_whale_poster
@@ -58,10 +60,11 @@ async def _list_models(gift_id: int) -> None:
 
 
 async def _run_whale(threshold_ton: float) -> None:
-    """Run the multi-source whale feed (Telegram Resale + Getgems).
+    """Run the multi-source whale feed (Telegram Resale + Getgems + Fragment).
 
     Telegram Resale is always on (uses Telethon session). Getgems is
-    enabled if ``GETGEMS_API_KEY`` is set in the environment.
+    enabled if ``GETGEMS_API_KEY`` is set in the environment. Fragment is
+    enabled by default and disabled by setting ``WHALE_FRAGMENT_ENABLED=0``.
     """
     from dotenv import load_dotenv
 
@@ -69,6 +72,7 @@ async def _run_whale(threshold_ton: float) -> None:
     bot_token = os.getenv("WHALE_BOT_TOKEN", "").strip()
     channel = os.getenv("WHALE_CHANNEL", "").strip()
     getgems_key = os.getenv("GETGEMS_API_KEY", "").strip()
+    fragment_enabled = os.getenv("WHALE_FRAGMENT_ENABLED", "1").strip() != "0"
     if not bot_token:
         logger.error("WHALE_BOT_TOKEN not set in .env — cannot start whale feed")
         sys.exit(1)
@@ -93,9 +97,10 @@ async def _run_whale(threshold_ton: float) -> None:
 
     def _shutdown() -> None:
         logger.info(
-            "Whale feed shutting down… telegram=%s getgems=%s",
+            "Whale feed shutting down… telegram=%s getgems=%s fragment=%s",
             get_whale_stats(),
             get_getgems_stats(),
+            get_fragment_stats(),
         )
         for task in asyncio.all_tasks(loop):
             task.cancel()
@@ -127,6 +132,22 @@ async def _run_whale(threshold_ton: float) -> None:
             "Getgems source disabled — set GETGEMS_API_KEY in .env to enable.",
         )
 
+    if fragment_enabled:
+        logger.info("Fragment source enabled (HTML polling).")
+        tasks.append(
+            asyncio.create_task(
+                run_fragment_feed(
+                    on_sold=poster,
+                    threshold_ton=threshold_ton,
+                ),
+                name="whale-fragment",
+            )
+        )
+    else:
+        logger.info(
+            "Fragment source disabled (WHALE_FRAGMENT_ENABLED=0).",
+        )
+
     try:
         await asyncio.gather(*tasks)
     except asyncio.CancelledError:
@@ -134,9 +155,10 @@ async def _run_whale(threshold_ton: float) -> None:
     finally:
         await client.disconnect()
         logger.info(
-            "Whale feed disconnected. Final stats: telegram=%s getgems=%s",
+            "Whale feed disconnected. Final stats: telegram=%s getgems=%s fragment=%s",
             get_whale_stats(),
             get_getgems_stats(),
+            get_fragment_stats(),
         )
 
 
