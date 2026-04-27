@@ -22,7 +22,11 @@ Format mimics @giftwhalefeed:
 
 The ``<a>`` on the gift title gives Telegram a URL to expand into
 the link-preview block (showing the gift image) without us needing
-a separate raw URL line. Source name is plain text.
+a separate raw URL line. The source label is plain text by default,
+but for marketplaces we have referral links to (Portals, Tonnel) the
+source name is also rendered as an ``<a>`` to the operator's referral
+deep link, so every "Sold on Portals/Tonnel" line earns affiliate
+credit when readers click through.
 """
 
 from __future__ import annotations
@@ -76,6 +80,31 @@ def _esc(s: str) -> str:
     return _html.escape(s, quote=True)
 
 
+# Per-source referral deep links. Each entry maps the WhaleSale.source
+# label exactly as the source modules emit it (case-sensitive) to the
+# affiliate URL we wrap the source name in. Sources not listed here
+# render as plain text, matching the previous behaviour.
+_SOURCE_REFERRAL_LINKS: dict[str, str] = {
+    "Portals": (
+        "https://t.me/portals/market"
+        "?startapp=zulgx8-ref_gameCDbI-to_games"
+    ),
+    "Tonnel": (
+        "https://t.me/tonnel_network_bot/gifts"
+        "?startapp=ref_993435816"
+    ),
+}
+
+
+def _source_html(source: str) -> str:
+    """Render the source label, hyperlinking to a referral URL if known."""
+    label = _esc(source)
+    url = _SOURCE_REFERRAL_LINKS.get(source)
+    if not url:
+        return label
+    return f'<a href="{_esc(url)}">{label}</a>'
+
+
 def _fmt_ton(amount: float) -> str:
     """Format a TON amount the way marketplaces show it.
 
@@ -122,7 +151,7 @@ def _format_post(sale: WhaleSale, usd_rate: float) -> str:
         price_line = f"├ Price: {price_str} TON"
     lines.append(price_line)
 
-    lines.append(f"└ Sold on {_esc(sale.source)}")
+    lines.append(f"└ Sold on {_source_html(sale.source)}")
 
     return "\n".join(lines)
 
