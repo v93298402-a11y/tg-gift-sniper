@@ -193,8 +193,11 @@ async def run_tonnel_feed(
         threshold_ton,
     )
 
-    @client.on(events.NewMessage(chats=entity))
-    async def _on_new_post(event):  # noqa: ANN001
+    async def _handle(event):  # noqa: ANN001
+        # Listen for both NewMessage and MessageEdited so we don't miss
+        # posts published as a media placeholder + later text edit.
+        # The cross-source dedup cache in whale_poster collapses any
+        # duplicates that may slip through both paths.
         _stats["messages_seen"] += 1
         text = event.message.message or ""
         try:
@@ -230,6 +233,9 @@ async def run_tonnel_feed(
             await on_sold(sale)
         except Exception:
             logger.exception("Tonnel: on_sold callback raised")
+
+    client.add_event_handler(_handle, events.NewMessage(chats=entity))
+    client.add_event_handler(_handle, events.MessageEdited(chats=entity))
 
     # Keep the wrapping task alive forever — see whale_mrkt for rationale.
     await asyncio.Event().wait()

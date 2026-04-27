@@ -232,14 +232,17 @@ async def run_mrkt_feed(
         threshold_ton,
     )
 
-    @client.on(events.NewMessage(chats=entity))
-    async def _on_new_post(event):  # noqa: ANN001
+    async def _handle(event):  # noqa: ANN001
+        # @giftwhalefeed sometimes publishes media-bearing posts in two
+        # phases: an initial empty placeholder (which our NewMessage
+        # handler sees with empty text and silently drops) followed by
+        # an edit that populates the body. Registering both NewMessage
+        # and MessageEdited under the same handler catches the populated
+        # version. The cross-source dedup cache in whale_poster collapses
+        # any duplicates that may slip through both paths.
         _stats["messages_seen"] += 1
         text = event.message.message or ""
 
-        # Cheap pre-filter: skip posts that aren't tagged for MRKT
-        # without running the full parser. The aggregator channel
-        # mixes posts from several marketplaces.
         if _SOURCE_TAG_RE.search(text) is None:
             _stats["wrong_source"] += 1
             return
@@ -257,9 +260,6 @@ async def run_mrkt_feed(
             _stats["below_threshold"] += 1
             return
 
-        # Backfill any missing attributes — @giftwhalefeed already
-        # carries Model/Symbol/Backdrop in their posts, but enrich is
-        # cheap insurance against format drift or omitted Symbol.
         if not (sale.model and sale.symbol and sale.backdrop):
             try:
                 await enrich_attributes(client, sale)
@@ -279,6 +279,9 @@ async def run_mrkt_feed(
             await on_sold(sale)
         except Exception:
             logger.exception("MRKT: on_sold callback raised")
+
+    client.add_event_handler(_handle, events.NewMessage(chats=entity))
+    client.add_event_handler(_handle, events.MessageEdited(chats=entity))
 
     # Keep the wrapping task alive forever — the registered handler
     # runs on the client's main loop regardless of this coroutine's
