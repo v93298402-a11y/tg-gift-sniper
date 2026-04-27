@@ -73,7 +73,7 @@ async def main():
         return
     me = await client.get_me()
     print(f"Connected as {me.first_name} (id={me.id})")
-    await scan(client, "mrktnotification", parse_mrkt, "MRKT @mrktnotification")
+    await scan(client, "giftwhalefeed", parse_mrkt, "MRKT @giftwhalefeed (filter Sold on MRKT)")
     await scan(client, "GiftNotification", parse_tonnel, "Tonnel @GiftNotification")
     await client.disconnect()
 
