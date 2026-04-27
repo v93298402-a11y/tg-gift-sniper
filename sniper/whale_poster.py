@@ -93,6 +93,7 @@ _SOURCE_REFERRAL_LINKS: dict[str, str] = {
         "https://t.me/tonnel_network_bot/gifts"
         "?startapp=ref_993435816"
     ),
+    "MRKT": "https://t.me/mrkt/app?startapp=993435816",
 }
 
 
