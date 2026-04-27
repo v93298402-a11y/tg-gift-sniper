@@ -30,10 +30,19 @@ logger = logging.getLogger(__name__)
 
 GETGEMS_API_BASE = "https://api.getgems.io/public-api"
 GIFTS_HISTORY_PATH = "/v1/nfts/history/gifts"
+NFT_DETAIL_PATH = "/v1/nft"  # GET /v1/nft/<address> for traits
 GIFT_THRESHOLD_TON = 100.0
 POLL_INTERVAL_SEC = 60.0
 HTTP_TIMEOUT_SEC = 15.0
 SEEN_LT_BUFFER = 500  # cap on per-source dedup set
+# Getgems' history endpoint returns *on-chain* TON sales — the same sale
+# is visible regardless of which UI (Fragment, Getgems, MRKT, …) was
+# used. To get a useful "Sold on …" label, we delay Getgems posts by
+# this many seconds so Fragment (and other UI-specific sources, when
+# we add them) can win the dedup race when they've also seen the sale.
+# After the delay, if no other source posted, Getgems falls back to
+# emitting with its own label.
+POST_DELAY_SEC = 90.0
 
 
 _stats = {
@@ -42,6 +51,8 @@ _stats = {
     "sales_seen": 0,
     "sales_over_threshold": 0,
     "errors": 0,
+    "attribute_fetches": 0,
+    "attribute_fetch_errors": 0,
 }
 
 
@@ -66,6 +77,37 @@ async def _fetch_recent_sold(
     if not data.get("success"):
         raise RuntimeError(f"Getgems API returned success=false: {data!r}")
     return list(data.get("response", {}).get("items", []))
+
+
+async def _fetch_nft_traits(
+    client: httpx.AsyncClient,
+    api_key: str,
+    address: str,
+) -> tuple[str | None, str | None, str | None]:
+    """Fetch ``(model, backdrop, symbol)`` for an NFT from Getgems.
+
+    Returns ``(None, None, None)`` on any failure — the post can still
+    go out without traits, just with less detail.
+    """
+    url = f"{GETGEMS_API_BASE}{NFT_DETAIL_PATH}/{address}"
+    headers = {"Authorization": api_key, "Accept": "application/json"}
+    try:
+        resp = await client.get(url, headers=headers)
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception:
+        _stats["attribute_fetch_errors"] += 1
+        logger.warning("Failed to fetch traits for %s", address)
+        return None, None, None
+
+    _stats["attribute_fetches"] += 1
+    attrs = data.get("response", {}).get("attributes") or []
+    by_trait = {a.get("traitType"): a.get("value") for a in attrs}
+    return (
+        by_trait.get("Model"),
+        by_trait.get("Backdrop"),
+        by_trait.get("Symbol"),
+    )
 
 
 def _to_sale(item: dict) -> WhaleSale | None:
@@ -101,6 +143,55 @@ def _to_sale(item: dict) -> WhaleSale | None:
         seller_address=td.get("oldOwner"),
         buyer_address=td.get("newOwner"),
     )
+
+
+async def _handle_whale_sale(
+    client: httpx.AsyncClient,
+    api_key: str,
+    sale: WhaleSale,
+    on_sold: Callable[[WhaleSale], Awaitable[None]],
+) -> None:
+    """Enrich + delay-post a single Getgems whale sale.
+
+    Steps:
+    1. Fetch NFT traits (Model/Backdrop/Symbol) — Getgems history doesn't
+       include them, but the per-NFT endpoint does.
+    2. Sleep ``POST_DELAY_SEC`` so Fragment (or any other UI-specific
+       source) can win the dedup race with a more accurate ``source``
+       label when they've also seen the sale.
+    3. Call ``on_sold`` — the poster's TTL dedup cache silently drops
+       this if another source already posted the same sale.
+    """
+    if sale.nft_address:
+        model, backdrop, symbol = await _fetch_nft_traits(
+            client, api_key, sale.nft_address
+        )
+        sale = WhaleSale(
+            source=sale.source,
+            title=sale.title,
+            price_ton=sale.price_ton,
+            collection_title=sale.collection_title,
+            num=sale.num,
+            slug=sale.slug,
+            model=model or sale.model,
+            backdrop=backdrop or sale.backdrop,
+            symbol=symbol or sale.symbol,
+            nft_address=sale.nft_address,
+            seller_address=sale.seller_address,
+            buyer_address=sale.buyer_address,
+            marketplace_url=sale.marketplace_url,
+        )
+
+    if POST_DELAY_SEC > 0:
+        await asyncio.sleep(POST_DELAY_SEC)
+
+    try:
+        await on_sold(sale)
+    except Exception:
+        logger.exception(
+            "Getgems on_sold callback failed for %s",
+            sale.title,
+        )
 
 
 async def run_getgems_feed(
@@ -170,13 +261,11 @@ async def run_getgems_feed(
                         if sale.price_ton < threshold_ton:
                             continue
                         _stats["sales_over_threshold"] += 1
-                        try:
-                            await on_sold(sale)
-                        except Exception:
-                            logger.exception(
-                                "Getgems on_sold callback failed for %s",
-                                sale.title,
-                            )
+                        # Schedule each whale sale on its own task so the
+                        # POST_DELAY_SEC head-start doesn't block polling.
+                        asyncio.create_task(
+                            _handle_whale_sale(client, api_key, sale, on_sold)
+                        )
 
                 # Bound dedup memory.
                 if len(seen_lts) > SEEN_LT_BUFFER:
