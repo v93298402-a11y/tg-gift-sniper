@@ -28,6 +28,7 @@ from dotenv import load_dotenv
 from telethon import TelegramClient
 
 from sniper.auth import get_mrkt_token, get_portals_token
+from sniper.config import DEFAULT_API_HASH, DEFAULT_API_ID
 
 logger = logging.getLogger(__name__)
 
@@ -144,12 +145,9 @@ async def _main() -> None:
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
     load_dotenv()
-    api_id = int(os.getenv("API_ID", "0"))
-    api_hash = os.getenv("API_HASH", "")
+    api_id = int(os.getenv("API_ID", str(DEFAULT_API_ID)))
+    api_hash = os.getenv("API_HASH", DEFAULT_API_HASH)
     session = os.getenv("SESSION_NAME", "sniper")
-    if not api_id or not api_hash:
-        print("ERROR: API_ID / API_HASH missing from .env")
-        return
     client = TelegramClient(session, api_id, api_hash)
     await client.start()
 
