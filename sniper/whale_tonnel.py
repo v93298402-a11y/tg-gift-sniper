@@ -66,8 +66,10 @@ _SALE_ANCHORS = (
 
 # "Title #4824" with an optional emoji suffix. Title is letters / digits
 # / spaces / hyphens / apostrophes / dots. Stops at first '#'.
+# Accept typographic apostrophes (U+2019, U+2018, U+02BC) in addition
+# to ASCII '\''; see whale_mrkt for full rationale.
 _TITLE_RE = re.compile(
-    r"([A-Za-z][A-Za-z0-9 .'\-]*?)\s*#\s*(\d+)",
+    r"([A-Za-z][A-Za-z0-9 .'’‘ʼ\-]*?)\s*#\s*(\d+)",
 )
 # Match either:
 #   * "Price: 5.788" — used by Gift Sold / Offer Accepted posts.

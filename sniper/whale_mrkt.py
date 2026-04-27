@@ -74,8 +74,14 @@ _GIFT_SOLD_ANCHOR = "Gift Sold"
 
 # "Title #12345" — accepts letters, digits, spaces, hyphens, apostrophes,
 # dots in the title. Matches first occurrence after "Gift Sold".
+# IMPORTANT: marketplaces (and Telegram itself) frequently render names
+# with TYPOGRAPHIC apostrophes — right single quote U+2019 (’),
+# left single quote U+2018 (‘), modifier letter apostrophe U+02BC (ʼ).
+# If the regex only allows ASCII '\'' the engine treats the curly
+# apostrophe as a non-class char, skips past it, and starts matching
+# at the next letter, producing e.g. "s Cap" instead of "Santa’s Cap".
 _TITLE_RE = re.compile(
-    r"([A-Za-z][A-Za-z0-9 .'\-]*?)\s*#\s*(\d+)",
+    r"([A-Za-z][A-Za-z0-9 .'’‘ʼ\-]*?)\s*#\s*(\d+)",
 )
 # "Price: 142.97 TON" or "😋Price:142.97 TON". Tolerates missing/extra
 # whitespace and stray emoji directly preceding "Price".
