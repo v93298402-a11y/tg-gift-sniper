@@ -55,7 +55,7 @@ ACTIONS_PATH = "/api/market/actions/"
 GIFT_THRESHOLD_TON = 100.0
 POLL_INTERVAL_SEC = 60.0
 HTTP_TIMEOUT_SEC = 20.0
-ACTIONS_LIMIT = 50  # how many recent events to fetch per poll
+ACTIONS_LIMIT = 200  # how many recent events to fetch per poll
 SEEN_BUFFER = 1000
 MAX_SALE_AGE = timedelta(hours=6)
 SALE_TYPES = {"sale", "sold", "buy", "purchase", "buyout"}
@@ -253,6 +253,7 @@ async def run_portals_feed(
 
             now = datetime.now(timezone.utc)
             new_whales: list[WhaleSale] = []
+            unknown_types_logged: set[str] = set()
             for a in actions:
                 k = _key(a)
                 if k in seen_keys:
@@ -261,6 +262,23 @@ async def run_portals_feed(
 
                 atype = (a.get("type") or "").lower()
                 if atype not in SALE_TYPES:
+                    # Log unknown types once, so we can extend SALE_TYPES if
+                    # we see a sale-like event we don't recognize.
+                    if atype and atype not in unknown_types_logged:
+                        unknown_types_logged.add(atype)
+                        try:
+                            amt = float(a.get("amount") or 0)
+                        except (TypeError, ValueError):
+                            amt = 0.0
+                        if amt >= 50.0:
+                            logger.info(
+                                "Portals: skipping unknown action type=%r "
+                                "amount=%.2f nft=%s — extend SALE_TYPES if "
+                                "this is a sale.",
+                                atype,
+                                amt,
+                                (a.get("nft") or {}).get("name"),
+                            )
                     continue
                 _stats["sales_seen"] += 1
 
@@ -271,7 +289,28 @@ async def run_portals_feed(
 
                 sale = _to_sale(a)
                 if sale is None:
+                    nft = a.get("nft") or {}
+                    logger.warning(
+                        "Portals: dropping sale-type=%r amount=%r — could "
+                        "not build WhaleSale (nft=%s number=%s).",
+                        atype,
+                        a.get("amount"),
+                        nft.get("name"),
+                        nft.get("external_collection_number"),
+                    )
                     continue
+                # Always log sale-type events with non-trivial amount so we
+                # can audit threshold filtering and dedup behaviour.
+                if sale.price_ton >= 50.0:
+                    logger.info(
+                        "Portals sale seen: %s @ %.2f TON (threshold=%.1f, "
+                        "%s)",
+                        sale.title,
+                        sale.price_ton,
+                        threshold_ton,
+                        "EMITTING" if sale.price_ton >= threshold_ton
+                        else "below threshold",
+                    )
                 if sale.price_ton < threshold_ton:
                     continue
                 new_whales.append(sale)
