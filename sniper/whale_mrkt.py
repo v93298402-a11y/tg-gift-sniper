@@ -74,14 +74,22 @@ SEEN_BUFFER = 1000
 # two; six hours is generous.
 MAX_SALE_AGE = timedelta(hours=6)
 
+# Body shape mirrors what the MRKT Mini-App sends (captured via HAR):
+#   type=["Sale"]   server-side filter — return ONLY purchase events,
+#                  not listings/de-listings/etc. Without it the server
+#                  may reject the request or return a mixed feed.
+#   count=20       Mini-App default; larger values may be capped or
+#                  trigger anti-abuse 401s.
+#   cursor=""      empty cursor = newest page; subsequent pages would
+#                  pass the previous response's nextCursor.
 _REQUEST_BODY = {
-    "count": 50,
+    "count": 20,
     "cursor": "",
     "collectionNames": [],
     "modelNames": [],
     "backdropNames": [],
     "number": None,
-    "type": [],
+    "type": ["Sale"],
     "minPrice": None,
     "maxPrice": None,
     "ordering": "Latest",
@@ -89,11 +97,23 @@ _REQUEST_BODY = {
     "query": None,
 }
 
+# Headers mirror exactly what the Mini-App sends. Cloudflare in front
+# of api.tgmrkt.io appears to fingerprint the sec-fetch-* combination,
+# so dropping any of these can flip the response to 401.
 _BASE_HEADERS = {
-    "Accept": "application/json",
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "en-US,en;q=0.9",
     "Content-Type": "application/json",
     "Origin": "https://cdn.tgmrkt.io",
     "Referer": "https://cdn.tgmrkt.io/",
+    "Sec-Ch-Ua": (
+        '"Not(A:Brand";v="8", "Chromium";v="144", "Google Chrome";v="144"'
+    ),
+    "Sec-Ch-Ua-Mobile": "?0",
+    "Sec-Ch-Ua-Platform": '"Windows"',
+    "Sec-Fetch-Dest": "empty",
+    "Sec-Fetch-Mode": "cors",
+    "Sec-Fetch-Site": "same-site",
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
         "(KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36"
@@ -172,19 +192,20 @@ class _AuthError(Exception):
 async def _fetch_feed(client: httpx.AsyncClient, token: str) -> list[dict]:
     url = MRKT_API_BASE + FEED_PATH
     headers = dict(_BASE_HEADERS)
-    if token:
-        headers["Authorization"] = token
+    # The Mini-App does NOT send an Authorization header to /feed — the
+    # endpoint is publicly readable from the right Origin/Referer.
+    # Sending our /api/v1/auth UUID actually flips the response to 401
+    # (likely treated as an invalid bearer). The ``token`` argument is
+    # kept in the signature for API-symmetry with run_mrkt_feed but is
+    # intentionally unused here.
+    _ = token
     resp = await client.post(url, json=_REQUEST_BODY, headers=headers)
     if resp.status_code in (401, 403):
-        # Log the response body once — helps diagnose token scope vs format
-        # vs region-blocked vs missing X-headers issues.
         body = resp.text[:200] if resp.text else "<empty>"
         logger.warning(
-            "MRKT /feed %d: body=%r token_len=%d token_head=%s",
+            "MRKT /feed %d: body=%r",
             resp.status_code,
             body,
-            len(token),
-            token[:10] if token else "",
         )
         raise _AuthError(f"MRKT auth error {resp.status_code}")
     resp.raise_for_status()
