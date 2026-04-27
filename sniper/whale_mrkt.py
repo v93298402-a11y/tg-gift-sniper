@@ -230,6 +230,16 @@ async def run_mrkt_feed(
     seen_ids: set[str] = set()
     bootstrap_done = False
     token = initial_token
+    # MRKT's /feed sits behind a Cloudflare WAF rule that 401s every
+    # request from non-residential IPs, regardless of headers / TLS
+    # fingerprint / token. After this many consecutive 401s we stop
+    # polling entirely (silent suspend) — the source then sleeps in a
+    # long loop so the rest of whale-feed isn't slowed by retries.
+    # MRKT sales are still picked up by the on-chain Getgems source.
+    AUTH_FAIL_LIMIT = 5
+    SUSPEND_SLEEP_SEC = 3600.0
+    consecutive_auth_fails = 0
+    suspended = False
 
     logger.info(
         "MRKT feed starting: threshold=%.1f TON, poll=%.1fs, token_present=%s",
@@ -241,38 +251,63 @@ async def run_mrkt_feed(
     backoff = poll_interval_sec
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT_SEC) as client:
         while True:
-            try:
-                items = await _fetch_feed(client, token)
-            except _AuthError:
-                if refresh_token is None:
-                    _stats["errors"] += 1
-                    logger.warning(
-                        "MRKT auth expired and no refresh callback set — "
-                        "sleeping and retrying."
-                    )
+            if suspended:
+                # Long sleep, no API calls. Wake every hour just in case
+                # the WAF rule changes; one /feed attempt — if it works,
+                # un-suspend and resume normal polling.
+                await asyncio.sleep(SUSPEND_SLEEP_SEC)
+                try:
+                    items = await _fetch_feed(client, token)
+                except _AuthError:
+                    continue
+                except Exception:
+                    continue
+                logger.info(
+                    "MRKT feed back online after suspend — resuming.",
+                )
+                suspended = False
+                consecutive_auth_fails = 0
+                # fall through into normal processing path with `items`
+            else:
+                try:
+                    items = await _fetch_feed(client, token)
+                except _AuthError:
+                    consecutive_auth_fails += 1
+                    if consecutive_auth_fails >= AUTH_FAIL_LIMIT:
+                        logger.warning(
+                            "MRKT /feed has 401'd %d times in a row — "
+                            "Cloudflare/WAF appears to block this IP. "
+                            "Suspending MRKT polling. Sales will still "
+                            "be captured via the Getgems on-chain "
+                            "source.",
+                            consecutive_auth_fails,
+                        )
+                        suspended = True
+                        continue
+                    if refresh_token is None:
+                        _stats["errors"] += 1
+                        await asyncio.sleep(poll_interval_sec)
+                        continue
+                    try:
+                        new_tok = await refresh_token()
+                    except Exception:
+                        logger.exception("MRKT token refresh failed")
+                        new_tok = ""
+                    if new_tok:
+                        token = new_tok
+                        _stats["auth_refreshes"] += 1
+                    else:
+                        _stats["errors"] += 1
                     await asyncio.sleep(poll_interval_sec)
                     continue
-                logger.warning("MRKT auth expired, re-fetching token…")
-                try:
-                    new_tok = await refresh_token()
                 except Exception:
-                    logger.exception("MRKT token refresh failed")
-                    new_tok = ""
-                if new_tok:
-                    token = new_tok
-                    _stats["auth_refreshes"] += 1
-                    logger.info("MRKT token refreshed.")
-                else:
                     _stats["errors"] += 1
-                    logger.warning("MRKT token refresh returned empty.")
-                await asyncio.sleep(poll_interval_sec)
-                continue
-            except Exception:
-                _stats["errors"] += 1
-                logger.exception("MRKT feed HTTP error")
-                await asyncio.sleep(min(backoff * 2, 300.0))
-                backoff = min(backoff * 2, 300.0)
-                continue
+                    logger.exception("MRKT feed HTTP error")
+                    await asyncio.sleep(min(backoff * 2, 300.0))
+                    backoff = min(backoff * 2, 300.0)
+                    continue
+            # Successful response — reset backoff & auth-fail counter.
+            consecutive_auth_fails = 0
             backoff = poll_interval_sec
             _stats["polls"] += 1
             _stats["items_seen"] += len(items)
