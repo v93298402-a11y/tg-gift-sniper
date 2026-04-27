@@ -161,7 +161,11 @@ class _AuthError(Exception):
 
 async def _fetch_actions(client: httpx.AsyncClient, token: str) -> list[dict]:
     url = PORTALS_API_BASE + ACTIONS_PATH
-    params = {"offset": 0, "limit": ACTIONS_LIMIT}
+    # action_types=sell is a server-side filter the Mini-App uses: it
+    # returns ONLY purchase events, dropping price_update / listing /
+    # transfer noise. Without it, low-volume whale sales (1-2 per hour)
+    # get pushed off the latest-N window by high-volume listing churn.
+    params = {"offset": 0, "limit": ACTIONS_LIMIT, "action_types": "sell"}
     headers = dict(_BASE_HEADERS)
     if token:
         headers["Authorization"] = token
