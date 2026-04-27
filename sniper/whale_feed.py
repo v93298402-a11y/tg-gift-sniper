@@ -309,6 +309,7 @@ async def run_whale_feed(
 
         elapsed = asyncio.get_event_loop().time() - cycle_start
         sleep_for = max(1.0, cycle_interval_sec - elapsed)
+        _stats["tracked_now"] = len(_tracked)
         logger.info(
             "Whale feed cycle done in %.1fs — tracking %d listings, "
             "stats=%s; sleeping %.1fs",
