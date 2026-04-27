@@ -299,15 +299,45 @@ async def _process_disappearances(
     for i, listing in enumerate(to_verify):
         if i > 0:
             await asyncio.sleep(OWNER_CHECK_GAP_SEC)
-        sold, _gift = await _verify_sold(client, listing)
+        sold, gift = await _verify_sold(client, listing)
         if sold:
             _stats["verified_sold"] += 1
+            logger.info(
+                "TG-Resale SOLD: %s #%d @ %.2f TON (slug=%s); "
+                "owner peer %s -> %s, addr %s -> %s",
+                listing.collection_title,
+                listing.num,
+                listing.price_ton,
+                listing.slug,
+                listing.seller_peer,
+                gift.owner_id if gift is not None else None,
+                listing.seller_address,
+                gift.owner_address if gift is not None else None,
+            )
             try:
                 await on_sold(_to_whale_sale(listing))
             except Exception:
                 logger.exception("on_sold callback failed for slug=%s", listing.slug)
         else:
             _stats["verified_delisted"] += 1
+            # One-off DEBUG so we can confirm verify is reaching this branch
+            # at all — if we never see "TG-Resale SOLD" entries but plenty
+            # of "delisted" entries, the verify logic is wrongly classifying
+            # sales as delistings (likely a Peer-equality bug).
+            if _stats["verified_delisted"] <= 5 or _stats["verified_delisted"] % 50 == 0:
+                logger.info(
+                    "TG-Resale delisted: %s #%d @ %.2f TON (slug=%s); "
+                    "owner peer %s == %s, addr %s == %s, currently_listed=%s",
+                    listing.collection_title,
+                    listing.num,
+                    listing.price_ton,
+                    listing.slug,
+                    listing.seller_peer,
+                    gift.owner_id if gift is not None else None,
+                    listing.seller_address,
+                    gift.owner_address if gift is not None else None,
+                    bool(gift.resell_amount) if gift is not None else None,
+                )
         _tracked.pop(listing.slug, None)
 
 
