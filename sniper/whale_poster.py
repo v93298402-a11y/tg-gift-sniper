@@ -151,7 +151,12 @@ def _format_post(sale: WhaleSale, usd_rate: float) -> str:
         price_line = f"├ Price: {price_str} TON"
     lines.append(price_line)
 
-    lines.append(f"└ Sold on {_source_html(sale.source)}")
+    source_html = _source_html(sale.source)
+    if sale.is_auction:
+        # Marker so readers can tell at a glance the price came from a
+        # winning bid rather than a fixed-price listing.
+        source_html = f"{source_html} (Auction)"
+    lines.append(f"└ Sold on {source_html}")
 
     return "\n".join(lines)
 

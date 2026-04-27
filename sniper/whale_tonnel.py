@@ -110,6 +110,8 @@ def parse_sale_message(text: str) -> WhaleSale | None:
     if not text or not _has_sale_anchor(text):
         return None
 
+    is_auction = "Auction Finished" in text
+
     # Cashback line repeats the word "Earned" — strip it from the body
     # used for price parsing so we don't accidentally pick up cashback
     # as the sale price (the regex below picks the FIRST "Price:" hit
@@ -153,6 +155,7 @@ def parse_sale_message(text: str) -> WhaleSale | None:
         nft_address=None,
         seller_address=None,
         buyer_address=None,
+        is_auction=is_auction,
     )
 
 

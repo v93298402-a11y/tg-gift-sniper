@@ -39,6 +39,11 @@ class WhaleSale:
     seller_address: str | None = None
     buyer_address: str | None = None
     marketplace_url: str | None = None  # explicit link override (e.g. fragment.com)
+    # True if the sale was an auction settlement (e.g. Tonnel "Auction
+    # Finished!" posts). The poster renders this as a "(Auction)" suffix
+    # on the source label so readers know the price came from a winning
+    # bid rather than a fixed-price listing.
+    is_auction: bool = False
 
     @property
     def link(self) -> str:
