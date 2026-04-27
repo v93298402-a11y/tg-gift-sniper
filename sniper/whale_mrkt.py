@@ -1,50 +1,41 @@
 """Whale-feed source for MRKT (tgmrkt.io) Telegram-gift sales.
 
-This source is a *Telethon channel scraper*, not an HTTP API client.
+This source is a *Telethon channel scraper*.
 
-MRKT operates an official "Real-Time Sales" notification channel at
-``@mrktnotification`` (linked from the main ``@official_mrkt`` channel
-description). Every gift sale on the marketplace produces a single
-post in this channel within seconds. The post format is::
+We initially scraped MRKT's own ``@mrktnotification`` channel, but in
+practice that channel turned out to be unreliable — it dropped many
+real sales (e.g. Vintage Cigar #9740 sold on MRKT for 158 TON appeared
+in the community aggregator ``@giftwhalefeed`` but never in
+``@mrktnotification``) and occasionally reposted week-old sales,
+causing them to be re-emitted. We do not have a clean signal for
+filtering those replays.
 
-    ⚡ Gift Sold
+The community aggregator ``@giftwhalefeed`` (12k+ subscribers, see
+https://t.me/giftwhalefeed) operates a much more reliable scraper:
+every whale sale across MRKT, Tonnel, Telegram Resale, Getgems,
+Portals, Fragment is posted within seconds. Their post format is
+stable and includes Model / Backdrop / Symbol / Price / source tag.
 
-    Jack-in-the-Box #11960
+We listen to ``@giftwhalefeed`` via Telethon and emit only the posts
+tagged ``Sold on MRKT``. Other source tags are ignored — those
+marketplaces have their own working sources in this project.
 
-    - Model: Super Block (3%)
-    - Symbol: Valkyrie (%)
-    - Backdrop: Moonstone (%)
+Post format::
 
-    😋Price: 3.21 TON
+    🎉 GIFT SOLD!
 
-    [forwarded NFT preview]
-    [inline button: "Check it on MRKT"]
+    🟫 Vintage Cigar #9740
+    ├ Model: Short Fuse
+    ├ Backdrop: Neon Blue
+    ├ Symbol: Candle
+    ├ Price: 158.0 TON (~$206.98)
+    └ Sold on MRKT
 
-…or sometimes a single-line variant for pinned / promoted whales::
-
-    ⚡ Gift Sold  Scared Cat #11554  - Model: Puss in Boots (4%) -
-    Symbol: Blood Drop (%) - Backdrop: Azure Blue (%) 😋 Price: 142.97 TON
-
-We previously polled MRKT's ``/api/v1/feed`` HTTP endpoint, but it sits
-behind a Cloudflare WAF rule that returns 401 to every request from
-non-residential IPs (verified across direct httpx, curl_cffi with
-Chrome TLS fingerprint, HTTP/2, with/without our Telethon-issued auth
-token, with/without browser-like Origin/Referer/sec-* headers). The
-WAF rule cannot be bypassed without a residential proxy, so we instead
-read the same data from the marketplace's own Telegram channel using
-the existing Telethon session.
-
-Advantages of the channel-scraper approach:
-
-* No HTTP auth, no proxy, no Cloudflare hassle.
-* Real-time: posts arrive ≤1s after each sale.
-* Uses the Telethon client we already have.
-
-Disadvantages:
-
-* Tied to MRKT's chosen post format; if they reword posts the parser
-  must follow. The format has been stable for months, but a fallback
-  log path is included so format drift surfaces immediately.
+If ``@giftwhalefeed`` ever degrades, set the env var
+``WHALE_MRKT_CHANNEL`` to point at a different channel (e.g. back to
+``mrktnotification``) — the parser is forgiving enough to handle both
+formats: it anchors on ``GIFT SOLD`` / ``Gift Sold`` and the
+``Sold on MRKT`` filter is a no-op for the MRKT-only channel.
 """
 
 from __future__ import annotations
@@ -68,34 +59,36 @@ logger = logging.getLogger(__name__)
 
 
 GIFT_THRESHOLD_TON = 100.0
-MRKT_CHANNEL = "mrktnotification"
+MRKT_CHANNEL = "giftwhalefeed"
 
-_GIFT_SOLD_ANCHOR = "Gift Sold"
+# Either of the two anchors works:
+#   * "GIFT SOLD!"  — @giftwhalefeed format (uppercase)
+#   * "Gift Sold"   — @mrktnotification format (titlecase)
+_ANCHOR_RE = re.compile(r"GIFT\s+SOLD", re.IGNORECASE)
+# Source tag identifying which marketplace executed the sale. We only
+# emit when this matches MRKT. Tolerate "Sold on MRKT" / "Sold on Mrkt".
+_SOURCE_TAG_RE = re.compile(r"Sold\s+on\s+MRKT\b", re.IGNORECASE)
 
 # "Title #12345" — accepts letters, digits, spaces, hyphens, apostrophes,
-# dots in the title. Matches first occurrence after "Gift Sold".
-# IMPORTANT: marketplaces (and Telegram itself) frequently render names
-# with TYPOGRAPHIC apostrophes — right single quote U+2019 (’),
-# left single quote U+2018 (‘), modifier letter apostrophe U+02BC (ʼ).
-# If the regex only allows ASCII '\'' the engine treats the curly
-# apostrophe as a non-class char, skips past it, and starts matching
-# at the next letter, producing e.g. "s Cap" instead of "Santa’s Cap".
+# dots in the title. Matches first occurrence after the anchor.
+# Accept typographic apostrophes (U+2019, U+2018, U+02BC) in addition
+# to ASCII '\''; without them "Durov’s Cap" parses as just "s Cap".
 _TITLE_RE = re.compile(
     r"([A-Za-z][A-Za-z0-9 .'’‘ʼ\-]*?)\s*#\s*(\d+)",
 )
-# "Price: 142.97 TON" or "😋Price:142.97 TON". Tolerates missing/extra
-# whitespace and stray emoji directly preceding "Price".
+# "Price: 158.0 TON (~$206.98)" / "Price: 142.97 TON" / "😋Price:142.97 TON".
+# Tolerates missing/extra whitespace and stray emoji or pipes preceding
+# "Price". Optional USD parenthetical is ignored.
 _PRICE_RE = re.compile(
     r"Price\s*:?\s*([\d]+(?:[.,]\d+)?)\s*TON",
     re.IGNORECASE,
 )
-# "Model: Super Block (3%)" — capture everything between the keyword
-# and the next attribute boundary, then strip ``(rarity)`` and trailing
-# punctuation in :func:`_clean_attr`. Single-line whale posts bunch
-# attributes on one line separated by " - ", so we stop at the next
-# attribute keyword or the price-emoji rather than relying on \n.
+# Each attribute may be prefixed by "├" / "└" / "-" / "•" depending on
+# whose channel the post came from. The body capture stops at the next
+# attribute keyword, the next box-drawing prefix, or end of line.
 _ATTR_BOUNDARY = (
-    r"(?=\s*(?:-\s*(?:Model|Symbol|Backdrop)|Price|😋|\n|$))"
+    r"(?=\s*(?:[├└\-]\s*(?:Model|Symbol|Backdrop|Price|Sold)|"
+    r"Price|Sold\s+on|😋|\n|$))"
 )
 _MODEL_RE = re.compile(
     rf"Model\s*:\s*(.+?){_ATTR_BOUNDARY}",
@@ -118,6 +111,7 @@ _stats: dict[str, int] = {
     "whales_emitted": 0,
     "parse_errors": 0,
     "below_threshold": 0,
+    "wrong_source": 0,
 }
 
 
@@ -131,26 +125,29 @@ def _clean_attr(s: str | None) -> str | None:
         return None
     s = s.strip()
     s = _RARITY_PAREN_RE.sub("", s)
-    s = s.strip(" -·.,;:")
+    s = s.strip(" -·.,;:├└|")
     return s or None
 
 
 def parse_sale_message(text: str) -> WhaleSale | None:
-    """Parse one MRKT notification post into a :class:`WhaleSale`.
+    """Parse one ``@giftwhalefeed`` post tagged ``Sold on MRKT``.
 
-    Returns ``None`` if the message is not a recognised "Gift Sold"
-    post. Only the price field is mandatory; if other fields are
-    missing they're left as ``None`` and the poster will degrade
-    gracefully.
+    Returns ``None`` if the message is not a "GIFT SOLD" post or if
+    its source tag is anything other than MRKT. Other markets are
+    handled by their own modules in this project, so we deliberately
+    drop their posts here even though they appear in the same channel.
     """
     if not text:
         return None
-    if _GIFT_SOLD_ANCHOR not in text:
+    anchor_match = _ANCHOR_RE.search(text)
+    if anchor_match is None:
+        return None
+    if _SOURCE_TAG_RE.search(text) is None:
         return None
 
     # Trim everything before the anchor so a stray "#12345" earlier in
-    # the message (e.g. quoted source post) can't fool _TITLE_RE.
-    body = text[text.index(_GIFT_SOLD_ANCHOR) + len(_GIFT_SOLD_ANCHOR):]
+    # the message can't fool _TITLE_RE.
+    body = text[anchor_match.end():]
 
     title_match = _TITLE_RE.search(body)
     if not title_match:
@@ -200,12 +197,12 @@ async def run_mrkt_feed(
     threshold_ton: float = GIFT_THRESHOLD_TON,
     channel: str = MRKT_CHANNEL,
 ) -> None:
-    """Subscribe to ``@mrktnotification`` via Telethon and forward whales.
+    """Subscribe to ``@giftwhalefeed`` via Telethon and forward MRKT sales.
 
     Runs forever. Resolves the channel entity once on startup, then
     registers a NewMessage handler scoped to that channel. The handler
-    parses each post; sales at or above ``threshold_ton`` are forwarded
-    to ``on_sold``.
+    parses each post; only posts tagged ``Sold on MRKT`` and at or
+    above ``threshold_ton`` are forwarded to ``on_sold``.
 
     The Telethon client must already be connected and authorised
     (i.e. the same client used by the rest of whale-feed). If the
@@ -230,7 +227,7 @@ async def run_mrkt_feed(
         return
 
     logger.info(
-        "MRKT feed starting: channel=@%s threshold=%.1f TON",
+        "MRKT feed starting: channel=@%s threshold=%.1f TON (filter: 'Sold on MRKT')",
         channel,
         threshold_ton,
     )
@@ -239,6 +236,14 @@ async def run_mrkt_feed(
     async def _on_new_post(event):  # noqa: ANN001
         _stats["messages_seen"] += 1
         text = event.message.message or ""
+
+        # Cheap pre-filter: skip posts that aren't tagged for MRKT
+        # without running the full parser. The aggregator channel
+        # mixes posts from several marketplaces.
+        if _SOURCE_TAG_RE.search(text) is None:
+            _stats["wrong_source"] += 1
+            return
+
         try:
             sale = parse_sale_message(text)
         except Exception:
@@ -252,9 +257,9 @@ async def run_mrkt_feed(
             _stats["below_threshold"] += 1
             return
 
-        # Backfill any missing attributes (rare for MRKT — their posts
-        # usually carry Model/Symbol/Backdrop — but cheap insurance
-        # against format drift).
+        # Backfill any missing attributes — @giftwhalefeed already
+        # carries Model/Symbol/Backdrop in their posts, but enrich is
+        # cheap insurance against format drift or omitted Symbol.
         if not (sale.model and sale.symbol and sale.backdrop):
             try:
                 await enrich_attributes(client, sale)
