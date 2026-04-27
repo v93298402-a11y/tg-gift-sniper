@@ -23,7 +23,9 @@ from __future__ import annotations
 
 import asyncio
 import os
+import shutil
 import sys
+import tempfile
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _ROOT = os.path.dirname(_HERE)
@@ -40,8 +42,15 @@ load_dotenv(os.path.join(_ROOT, ".env"))
 async def main(slug: str) -> None:
     api_id = int(os.getenv("API_ID", str(DEFAULT_API_ID)))
     api_hash = os.getenv("API_HASH", DEFAULT_API_HASH)
-    session = os.path.join(_ROOT, os.getenv("SESSION_NAME", "sniper"))
-    client = TelegramClient(session, api_id, api_hash)
+    session_name = os.getenv("SESSION_NAME", "sniper")
+    session_src = os.path.join(_ROOT, session_name + ".session")
+    # Copy the session DB to a temp location so we can connect alongside
+    # the running whale-feed service without hitting "database is locked"
+    # (Telethon SQLite sessions allow only a single writer at a time).
+    tmpdir = tempfile.mkdtemp(prefix="lookup_gift_")
+    session_copy = os.path.join(tmpdir, session_name + ".session")
+    shutil.copyfile(session_src, session_copy)
+    client = TelegramClient(session_copy[: -len(".session")], api_id, api_hash)
     await client.connect()
     if not await client.is_user_authorized():
         print("ERROR: session not authorised.")
