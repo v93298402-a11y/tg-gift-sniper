@@ -176,6 +176,16 @@ async def _fetch_feed(client: httpx.AsyncClient, token: str) -> list[dict]:
         headers["Authorization"] = token
     resp = await client.post(url, json=_REQUEST_BODY, headers=headers)
     if resp.status_code in (401, 403):
+        # Log the response body once — helps diagnose token scope vs format
+        # vs region-blocked vs missing X-headers issues.
+        body = resp.text[:200] if resp.text else "<empty>"
+        logger.warning(
+            "MRKT /feed %d: body=%r token_len=%d token_head=%s",
+            resp.status_code,
+            body,
+            len(token),
+            token[:10] if token else "",
+        )
         raise _AuthError(f"MRKT auth error {resp.status_code}")
     resp.raise_for_status()
     data = resp.json()
