@@ -69,11 +69,14 @@ _SALE_ANCHORS = (
 _TITLE_RE = re.compile(
     r"([A-Za-z][A-Za-z0-9 .'\-]*?)\s*#\s*(\d+)",
 )
-# "Price: 5.788" — Tonnel uses a 💎 emoji after the value but no "TON"
-# unit text in many posts, so we don't require a unit suffix. Price is
-# always in TON for the gifts channel.
+# Match either:
+#   * "Price: 5.788" — used by Gift Sold / Offer Accepted posts.
+#   * "Highest Bid: 202.65 TON" — used by Auction Finished posts.
+# Tonnel sometimes appends a 💎 emoji after the number rather than a
+# "TON" unit text, so we don't require a unit suffix. Cashback and
+# similar amount lines are stripped before parsing in :func:`parse_sale_message`.
 _PRICE_RE = re.compile(
-    r"Price\s*:?\s*([\d]+(?:[.,]\d+)?)",
+    r"(?:Highest\s*Bid|Price)\s*:?\s*([\d]+(?:[.,]\d+)?)",
     re.IGNORECASE,
 )
 
