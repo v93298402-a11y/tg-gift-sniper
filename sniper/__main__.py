@@ -19,6 +19,8 @@ from sniper.markets import run_market_monitor
 from sniper.poller import get_stats, run_loop
 from sniper.whale_feed import get_stats as get_whale_stats
 from sniper.whale_feed import run_whale_feed
+from sniper.whale_getgems import get_stats as get_getgems_stats
+from sniper.whale_getgems import run_getgems_feed
 from sniper.whale_poster import create_whale_poster
 
 logger = logging.getLogger("sniper")
@@ -56,12 +58,17 @@ async def _list_models(gift_id: int) -> None:
 
 
 async def _run_whale(threshold_ton: float) -> None:
-    """Run only the whale-feed monitor (no sniper, no market polling)."""
+    """Run the multi-source whale feed (Telegram Resale + Getgems).
+
+    Telegram Resale is always on (uses Telethon session). Getgems is
+    enabled if ``GETGEMS_API_KEY`` is set in the environment.
+    """
     from dotenv import load_dotenv
 
     load_dotenv()
     bot_token = os.getenv("WHALE_BOT_TOKEN", "").strip()
     channel = os.getenv("WHALE_CHANNEL", "").strip()
+    getgems_key = os.getenv("GETGEMS_API_KEY", "").strip()
     if not bot_token:
         logger.error("WHALE_BOT_TOKEN not set in .env — cannot start whale feed")
         sys.exit(1)
@@ -76,25 +83,61 @@ async def _run_whale(threshold_ton: float) -> None:
     logger.info("Logged in as %s (id=%d)", me.first_name, me.id)
 
     poster = create_whale_poster(bot_token=bot_token, channel=channel)
-    logger.info("Whale poster ready: channel=%s, threshold=%.1f TON", channel, threshold_ton)
+    logger.info(
+        "Whale poster ready: channel=%s, threshold=%.1f TON",
+        channel,
+        threshold_ton,
+    )
 
     loop = asyncio.get_running_loop()
 
     def _shutdown() -> None:
-        logger.info("Whale feed shutting down… stats=%s", get_whale_stats())
+        logger.info(
+            "Whale feed shutting down… telegram=%s getgems=%s",
+            get_whale_stats(),
+            get_getgems_stats(),
+        )
         for task in asyncio.all_tasks(loop):
             task.cancel()
 
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, _shutdown)
 
+    tasks: list[asyncio.Task] = []
+    tasks.append(
+        asyncio.create_task(
+            run_whale_feed(client, on_sold=poster, threshold_ton=threshold_ton),
+            name="whale-telegram",
+        )
+    )
+    if getgems_key:
+        logger.info("Getgems source enabled (API key present).")
+        tasks.append(
+            asyncio.create_task(
+                run_getgems_feed(
+                    api_key=getgems_key,
+                    on_sold=poster,
+                    threshold_ton=threshold_ton,
+                ),
+                name="whale-getgems",
+            )
+        )
+    else:
+        logger.info(
+            "Getgems source disabled — set GETGEMS_API_KEY in .env to enable.",
+        )
+
     try:
-        await run_whale_feed(client, on_sold=poster, threshold_ton=threshold_ton)
+        await asyncio.gather(*tasks)
     except asyncio.CancelledError:
         pass
     finally:
         await client.disconnect()
-        logger.info("Whale feed disconnected. Final stats: %s", get_whale_stats())
+        logger.info(
+            "Whale feed disconnected. Final stats: telegram=%s getgems=%s",
+            get_whale_stats(),
+            get_getgems_stats(),
+        )
 
 
 async def _run(cfg: Config, bot_mode: bool = False, self_mode: bool = False) -> None:

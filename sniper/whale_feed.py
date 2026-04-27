@@ -27,6 +27,8 @@ from typing import TYPE_CHECKING
 from telethon import functions, types
 from telethon.errors import BadRequestError, FloodWaitError
 
+from sniper.whale_types import WhaleSale
+
 if TYPE_CHECKING:
     from telethon import TelegramClient
 
@@ -242,10 +244,26 @@ async def _verify_sold(
     return (False, gift)
 
 
+def _to_whale_sale(listing: TrackedListing) -> WhaleSale:
+    """Convert an internal Telegram-Resale tracked listing to a WhaleSale."""
+    return WhaleSale(
+        source="Telegram",
+        title=f"{listing.collection_title} #{listing.num}",
+        price_ton=listing.price_ton,
+        collection_title=listing.collection_title,
+        num=listing.num,
+        slug=listing.slug,
+        model=listing.model,
+        backdrop=listing.backdrop,
+        symbol=listing.symbol,
+        seller_address=listing.seller_address,
+    )
+
+
 async def _process_disappearances(
     client: TelegramClient,
     seen_this_cycle: set[str],
-    on_sold: Callable[[TrackedListing, types.StarGiftUnique | None], Awaitable[None]],
+    on_sold: Callable[[WhaleSale], Awaitable[None]],
 ) -> None:
     """For listings that didn't show up this cycle, decide sold vs delisted."""
     to_verify: list[TrackedListing] = []
@@ -259,11 +277,11 @@ async def _process_disappearances(
     for i, listing in enumerate(to_verify):
         if i > 0:
             await asyncio.sleep(OWNER_CHECK_GAP_SEC)
-        sold, gift = await _verify_sold(client, listing)
+        sold, _gift = await _verify_sold(client, listing)
         if sold:
             _stats["verified_sold"] += 1
             try:
-                await on_sold(listing, gift)
+                await on_sold(_to_whale_sale(listing))
             except Exception:
                 logger.exception("on_sold callback failed for slug=%s", listing.slug)
         else:
@@ -273,7 +291,7 @@ async def _process_disappearances(
 
 async def run_whale_feed(
     client: TelegramClient,
-    on_sold: Callable[[TrackedListing, types.StarGiftUnique | None], Awaitable[None]],
+    on_sold: Callable[[WhaleSale], Awaitable[None]],
     threshold_ton: float = WHALE_THRESHOLD_TON,
     cycle_interval_sec: float = CYCLE_INTERVAL_SEC,
     collection_gap_sec: float = COLLECTION_GAP_SEC,

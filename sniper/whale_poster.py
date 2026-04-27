@@ -1,5 +1,14 @@
 """Post whale-feed sale events to a Telegram channel via Bot API.
 
+Supports multiple sources (Telegram Resale, Getgems, Fragment, …). All
+sources hand a :class:`~sniper.whale_types.WhaleSale` to the poster. The
+poster:
+
+  * deduplicates across sources (same sale reported by 2+ sources gets one
+    post — first one wins) using a TTL cache;
+  * caches TON/USD rate from CoinGecko (refreshed every 5 min);
+  * throttles outbound channel messages to ≤ 1 per ``min_interval_sec``.
+
 Format mimics @giftwhalefeed:
 
     🎉 GIFT SOLD!
@@ -9,7 +18,7 @@ Format mimics @giftwhalefeed:
     ├ Backdrop: <backdrop>
     ├ Symbol: <symbol>
     ├ Price: 156.00 TON (~$200.00)
-    └ Sold on Telegram
+    └ Sold on <Source>
 
     https://t.me/nft/<slug>
 """
@@ -19,14 +28,10 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from typing import TYPE_CHECKING
 
 import httpx
 
-if TYPE_CHECKING:
-    from telethon import types
-
-    from sniper.whale_feed import TrackedListing
+from sniper.whale_types import DedupCache, WhaleSale
 
 logger = logging.getLogger(__name__)
 
@@ -62,36 +67,36 @@ async def _ton_usd_rate() -> float:
     return price
 
 
-def _format_post(
-    listing: TrackedListing,
-    final_price_ton: float | None,
-    usd_rate: float,
-) -> str:
-    """Return the channel-message body."""
-    price_ton = final_price_ton if final_price_ton is not None else listing.price_ton
-    title = f"{listing.collection_title} #{listing.num}"
-    link = f"https://t.me/nft/{listing.slug}"
+def _format_post(sale: WhaleSale, usd_rate: float) -> str:
+    """Return the channel-message body for a sale."""
+    if sale.collection_title and sale.num is not None:
+        title = f"{sale.collection_title} #{sale.num}"
+    else:
+        title = sale.title
 
     lines: list[str] = []
     lines.append("🎉 GIFT SOLD!")
     lines.append("")
     lines.append(f"🏷 {title}")
-    if listing.model:
-        lines.append(f"├ Model: {listing.model}")
-    if listing.backdrop:
-        lines.append(f"├ Backdrop: {listing.backdrop}")
-    if listing.symbol:
-        lines.append(f"├ Symbol: {listing.symbol}")
+    if sale.model:
+        lines.append(f"├ Model: {sale.model}")
+    if sale.backdrop:
+        lines.append(f"├ Backdrop: {sale.backdrop}")
+    if sale.symbol:
+        lines.append(f"├ Symbol: {sale.symbol}")
 
     if usd_rate > 0:
-        usd = price_ton * usd_rate
-        price_line = f"├ Price: {price_ton:.2f} TON (~${usd:.2f})"
+        usd = sale.price_ton * usd_rate
+        price_line = f"├ Price: {sale.price_ton:.2f} TON (~${usd:.2f})"
     else:
-        price_line = f"├ Price: {price_ton:.2f} TON"
+        price_line = f"├ Price: {sale.price_ton:.2f} TON"
     lines.append(price_line)
-    lines.append("└ Sold on Telegram")
-    lines.append("")
-    lines.append(link)
+    lines.append(f"└ Sold on {sale.source}")
+
+    link = sale.link
+    if link:
+        lines.append("")
+        lines.append(link)
     return "\n".join(lines)
 
 
@@ -99,21 +104,37 @@ def create_whale_poster(
     bot_token: str,
     channel: str,
     min_interval_sec: float = 1.1,
+    dedup_ttl_sec: float = 1800.0,
 ):
-    """Return an async `post(listing, gift)` callback that publishes to a channel.
+    """Return an async ``post(sale)`` callback that publishes to a channel.
 
-    Posts are throttled to at most 1 per `min_interval_sec` to stay within
+    Posts are throttled to at most 1 per ``min_interval_sec`` to stay within
     Telegram's bot anti-spam limits for channels.
+
+    Cross-source dedup: if the same sale (same dedup key) was already posted
+    in the last ``dedup_ttl_sec`` seconds, the duplicate is silently dropped.
     """
     from telegram import Bot
 
     bot = Bot(token=bot_token)
     lock = asyncio.Lock()
     state = {"last_sent": 0.0}
+    dedup = DedupCache(ttl_sec=dedup_ttl_sec)
 
-    async def post(listing: TrackedListing, gift: types.StarGiftUnique | None) -> None:
+    async def post(sale: WhaleSale) -> None:
+        key = sale.dedup_key
+        if dedup.seen(key):
+            logger.info(
+                "Skipping duplicate %s sale: %s @ %.2f TON (key=%s)",
+                sale.source,
+                sale.title,
+                sale.price_ton,
+                key,
+            )
+            return
+
         usd = await _ton_usd_rate()
-        text = _format_post(listing, listing.price_ton, usd)
+        text = _format_post(sale, usd)
 
         async with lock:
             now = asyncio.get_event_loop().time()
@@ -126,16 +147,19 @@ def create_whale_poster(
                     text=text,
                     disable_web_page_preview=False,
                 )
+                dedup.mark(key)
                 logger.info(
-                    "Posted whale sale: %s #%d @ %.2f TON",
-                    listing.collection_title,
-                    listing.num,
-                    listing.price_ton,
+                    "Posted %s sale: %s @ %.2f TON",
+                    sale.source,
+                    sale.title,
+                    sale.price_ton,
                 )
             except Exception:
                 logger.exception(
-                    "Failed to post whale sale slug=%s",
-                    listing.slug,
+                    "Failed to post %s sale: %s @ %.2f TON",
+                    sale.source,
+                    sale.title,
+                    sale.price_ton,
                 )
             finally:
                 state["last_sent"] = asyncio.get_event_loop().time()
