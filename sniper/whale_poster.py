@@ -13,23 +13,27 @@ Format mimics @giftwhalefeed:
 
     🎉 GIFT SOLD!
 
-    🏷 <Collection> #<num>
+    🎁 <b><Collection> #<num></b>
     ├ Model: <model>
     ├ Backdrop: <backdrop>
     ├ Symbol: <symbol>
     ├ Price: 156.00 TON (~$200.00)
-    └ Sold on <Source>
+    └ Sold on <a href="https://t.me/nft/<slug>"><Source></a>
 
-    https://t.me/nft/<slug>
+The ``<a>`` on the source name gives Telegram a URL to expand into
+the link-preview block (showing the gift image / title) without us
+needing a separate raw URL line.
 """
 
 from __future__ import annotations
 
 import asyncio
+import html as _html
 import logging
 import time
 
 import httpx
+from telegram.constants import ParseMode
 
 from sniper.whale_types import DedupCache, WhaleSale
 
@@ -67,8 +71,13 @@ async def _ton_usd_rate() -> float:
     return price
 
 
+def _esc(s: str) -> str:
+    """HTML-escape user-controlled text for parse_mode=HTML."""
+    return _html.escape(s, quote=True)
+
+
 def _format_post(sale: WhaleSale, usd_rate: float) -> str:
-    """Return the channel-message body for a sale."""
+    """Return the channel-message body for a sale (HTML parse_mode)."""
     if sale.collection_title and sale.num is not None:
         title = f"{sale.collection_title} #{sale.num}"
     else:
@@ -77,13 +86,13 @@ def _format_post(sale: WhaleSale, usd_rate: float) -> str:
     lines: list[str] = []
     lines.append("🎉 GIFT SOLD!")
     lines.append("")
-    lines.append(f"🏷 {title}")
+    lines.append(f"🎁 <b>{_esc(title)}</b>")
     if sale.model:
-        lines.append(f"├ Model: {sale.model}")
+        lines.append(f"├ Model: {_esc(sale.model)}")
     if sale.backdrop:
-        lines.append(f"├ Backdrop: {sale.backdrop}")
+        lines.append(f"├ Backdrop: {_esc(sale.backdrop)}")
     if sale.symbol:
-        lines.append(f"├ Symbol: {sale.symbol}")
+        lines.append(f"├ Symbol: {_esc(sale.symbol)}")
 
     if usd_rate > 0:
         usd = sale.price_ton * usd_rate
@@ -91,12 +100,14 @@ def _format_post(sale: WhaleSale, usd_rate: float) -> str:
     else:
         price_line = f"├ Price: {sale.price_ton:.2f} TON"
     lines.append(price_line)
-    lines.append(f"└ Sold on {sale.source}")
 
     link = sale.link
+    source = _esc(sale.source)
     if link:
-        lines.append("")
-        lines.append(link)
+        lines.append(f'└ Sold on <a href="{_esc(link)}">{source}</a>')
+    else:
+        lines.append(f"└ Sold on {source}")
+
     return "\n".join(lines)
 
 
@@ -145,6 +156,7 @@ def create_whale_poster(
                 await bot.send_message(
                     chat_id=channel,
                     text=text,
+                    parse_mode=ParseMode.HTML,
                     disable_web_page_preview=False,
                 )
                 dedup.mark(key)
