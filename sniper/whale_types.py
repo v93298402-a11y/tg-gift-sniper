@@ -91,7 +91,12 @@ def derive_slug(name: str | None) -> tuple[str | None, str | None, int | None]:
         num = int(m.group("num"))
     except ValueError:
         return None, title or None, None
-    slug_title = re.sub(r"\s+", "", title)
+    # Telegram's https://t.me/nft/<slug> is built from CamelCase letters and
+    # digits only — apostrophes, accents, and punctuation are dropped.
+    # E.g. "Durov's Cap" -> "DurovsCap", "B-Day Candle" -> "BDayCandle".
+    slug_title = re.sub(r"[^A-Za-z0-9]", "", title)
+    if not slug_title:
+        return None, title or None, num
     slug = f"{slug_title}-{num}"
     return slug, title, num
 

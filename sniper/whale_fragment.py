@@ -144,12 +144,11 @@ def _row_to_sale(row: re.Match[str]) -> WhaleSale | None:
 
     fragment_slug = _slug_from_href(href)
     # Derive the canonical CamelCase slug from the gift name so links go to
-    # https://t.me/nft/<CamelSlug> and dedup_key matches Getgems output.
+    # https://t.me/nft/<CamelSlug> (the Telegram-native NFT page that
+    # renders the gift directly) and dedup_key matches Getgems output.
     canon_slug, collection_title, num = derive_slug(name)
 
     model, backdrop, symbol = _parse_attributes(attrs)
-
-    marketplace_url = f"{FRAGMENT_BASE}{href.split('?', 1)[0]}"
 
     return WhaleSale(
         source="Fragment",
@@ -161,13 +160,21 @@ def _row_to_sale(row: re.Match[str]) -> WhaleSale | None:
         model=model,
         backdrop=backdrop,
         symbol=symbol,
-        marketplace_url=marketplace_url,
     )
 
 
 def _row_dedup_key(row: re.Match[str]) -> str:
-    """Per-source dedup key — Fragment slug + ISO timestamp is unique."""
-    return f"{row.group('href')}|{row.group('ts')}"
+    """Per-source dedup key — keyed on slug only.
+
+    Fragment's ``?filter=sold&sort=listed`` page reshuffles rows whenever a
+    gift sees any listing-side activity (including re-listings or transfers
+    long after the original sale). Older sold gifts can re-enter the top-60
+    visible window with their original sale price + timestamp. To avoid
+    re-posting them as if they were fresh sales, we dedup on slug alone:
+    once we've seen a gift in the sold list, we never re-emit it.
+    """
+    slug = _slug_from_href(row.group("href"))
+    return slug or row.group("href")
 
 
 async def _fetch_sold_html(client: httpx.AsyncClient) -> str | None:
