@@ -52,6 +52,7 @@ class TrackedListing:
     price_ton: float
     seller_address: str | None
     seller_name: str | None
+    seller_peer: object | None  # types.Peer; kept as object to avoid import cycle
     model: str | None
     backdrop: str | None
     symbol: str | None
@@ -112,6 +113,7 @@ def _build_tracked(
         price_ton=price_ton,
         seller_address=gift.owner_address,
         seller_name=gift.owner_name,
+        seller_peer=gift.owner_id,
         model=_extract_attribute(gift, types.StarGiftAttributeModel),
         backdrop=_extract_attribute(gift, types.StarGiftAttributeBackdrop),
         symbol=_extract_attribute(gift, types.StarGiftAttributePattern),
@@ -200,6 +202,7 @@ async def _scan_collection(
             existing.price_ton = price_ton
             existing.seller_address = gift.owner_address
             existing.seller_name = gift.owner_name
+            existing.seller_peer = gift.owner_id
             existing.misses = 0
 
 
@@ -230,14 +233,33 @@ async def _verify_sold(
     if not isinstance(gift, types.StarGiftUnique):
         return (False, None)
 
-    prev = listing.seller_address
-    cur = gift.owner_address
-    # Owner change is the strongest signal of a sale. If we don't know the
-    # previous owner address, fall back to "no longer listed" — but only
-    # treat it as sold if the gift is also not currently listed for resale,
-    # to avoid posting on plain re-priced listings.
-    if prev and cur and prev != cur:
+    # Compare owner identity. A StarGiftUnique exposes both ``owner_id``
+    # (a Telegram Peer — set when the gift is held by a TG user, which
+    # is the common case) and ``owner_address`` (a TON wallet address,
+    # populated only when the gift was transferred onto a wallet).
+    # We must check BOTH; previously only ``owner_address`` was tracked,
+    # which left ``prev=None`` for the vast majority of gifts and
+    # caused every disappearance to register as "delisted" instead of
+    # "sold". A change in either identity field is conclusive evidence
+    # of a sale (the old owner no longer holds the gift).
+    prev_peer = listing.seller_peer
+    cur_peer = gift.owner_id
+    prev_addr = listing.seller_address
+    cur_addr = gift.owner_address
+    peer_changed = (
+        prev_peer is not None and cur_peer is not None and prev_peer != cur_peer
+    )
+    addr_changed = (
+        prev_addr is not None and cur_addr is not None and prev_addr != cur_addr
+    )
+    # Cross-type ownership change (peer → wallet or wallet → peer) also
+    # counts as a sale: the gift moved between two distinct holders.
+    cross_type = (prev_peer is not None and cur_peer is None and cur_addr) or (
+        prev_addr is not None and cur_addr is None and cur_peer is not None
+    )
+    if peer_changed or addr_changed or cross_type:
         return (True, gift)
+
     if not gift.resell_amount:
         # Not currently listed; if owner unchanged, the seller delisted.
         return (False, gift)
