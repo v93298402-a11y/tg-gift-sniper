@@ -85,9 +85,9 @@ def _summarise_json(body: object, limit: int = 800) -> str:
 
 
 async def _probe_mrkt(token: str) -> None:
-    print("\n========== MRKT ==========")
+    print("\n========== MRKT ==========", flush=True)
     if not token:
-        print("(no token — skipping MRKT)")
+        print("(no token — skipping MRKT)", flush=True)
         return
     headers = {"Authorization": token, "Referer": "https://cdn.tgmrkt.io/"}
     async with httpx.AsyncClient(timeout=10.0) as http:
@@ -96,32 +96,38 @@ async def _probe_mrkt(token: str) -> None:
             try:
                 r = await http.get(url, headers=headers)
             except Exception as e:
-                print(f"GET  {path:40s} -> EXC {e}")
+                print(f"GET  {path:40s} -> EXC {e}", flush=True)
+                await asyncio.sleep(0.5)
                 continue
-            print(f"GET  {path:40s} -> {r.status_code}", end="")
+            line = f"GET  {path:40s} -> {r.status_code}"
             if r.status_code == 200:
-                print(f"  body={_summarise_json(r.json())}")
+                line += f"  body={_summarise_json(r.json())}"
             else:
-                print(f"  body={r.text[:200]!r}")
+                line += f"  body={r.text[:200]!r}"
+            print(line, flush=True)
+            await asyncio.sleep(0.5)
 
         for path, body in _MRKT_CANDIDATES_POST:
             url = f"{_MRKT_BASE}{path}"
             try:
                 r = await http.post(url, json=body, headers=headers)
             except Exception as e:
-                print(f"POST {path:40s} body={body!s:60s} -> EXC {e}")
+                print(f"POST {path:40s} body={body!s:60s} -> EXC {e}", flush=True)
+                await asyncio.sleep(0.5)
                 continue
-            print(f"POST {path:40s} body={body!s:60s} -> {r.status_code}", end="")
+            line = f"POST {path:40s} body={body!s:60s} -> {r.status_code}"
             if r.status_code == 200:
-                print(f"  body={_summarise_json(r.json())}")
+                line += f"  body={_summarise_json(r.json())}"
             else:
-                print(f"  body={r.text[:200]!r}")
+                line += f"  body={r.text[:200]!r}"
+            print(line, flush=True)
+            await asyncio.sleep(0.5)
 
 
 async def _probe_portals(token: str) -> None:
-    print("\n========== PORTALS ==========")
+    print("\n========== PORTALS ==========", flush=True)
     if not token:
-        print("(no token — skipping Portals)")
+        print("(no token — skipping Portals)", flush=True)
         return
     headers = {"Authorization": token}
     async with httpx.AsyncClient(timeout=10.0) as http:
@@ -130,13 +136,16 @@ async def _probe_portals(token: str) -> None:
             try:
                 r = await http.get(url, params=params, headers=headers)
             except Exception as e:
-                print(f"GET {path:40s} params={params!s:50s} -> EXC {e}")
+                print(f"GET {path:40s} params={params!s:50s} -> EXC {e}", flush=True)
+                await asyncio.sleep(2.0)
                 continue
-            print(f"GET {path:40s} params={params!s:50s} -> {r.status_code}", end="")
+            line = f"GET {path:40s} params={params!s:50s} -> {r.status_code}"
             if r.status_code == 200:
-                print(f"  body={_summarise_json(r.json())}")
+                line += f"  body={_summarise_json(r.json())}"
             else:
-                print(f"  body={r.text[:200]!r}")
+                line += f"  body={r.text[:200]!r}"
+            print(line, flush=True)
+            await asyncio.sleep(2.0)  # respect Portals rate limits
 
 
 async def _main() -> None:

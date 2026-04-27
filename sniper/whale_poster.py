@@ -13,16 +13,16 @@ Format mimics @giftwhalefeed:
 
     🎉 GIFT SOLD!
 
-    🎁 <b><Collection> #<num></b>
+    🎁 <b><a href="https://t.me/nft/<slug>"><Collection> #<num></a></b>
     ├ Model: <model>
     ├ Backdrop: <backdrop>
     ├ Symbol: <symbol>
-    ├ Price: 156.00 TON (~$200.00)
-    └ Sold on <a href="https://t.me/nft/<slug>"><Source></a>
+    ├ Price: 156 TON (~$200.00)
+    └ Sold on <Source>
 
-The ``<a>`` on the source name gives Telegram a URL to expand into
-the link-preview block (showing the gift image / title) without us
-needing a separate raw URL line.
+The ``<a>`` on the gift title gives Telegram a URL to expand into
+the link-preview block (showing the gift image) without us needing
+a separate raw URL line. Source name is plain text.
 """
 
 from __future__ import annotations
@@ -76,6 +76,19 @@ def _esc(s: str) -> str:
     return _html.escape(s, quote=True)
 
 
+def _fmt_ton(amount: float) -> str:
+    """Format a TON amount the way marketplaces show it.
+
+    Drops trailing zeros and the decimal point if the amount is a whole
+    number (688.0 -> "688"). Keeps up to 2 decimal places otherwise
+    (234.567 -> "234.57", 234.5 -> "234.5").
+    """
+    rounded = round(amount, 2)
+    if rounded == int(rounded):
+        return str(int(rounded))
+    return f"{rounded:g}"
+
+
 def _format_post(sale: WhaleSale, usd_rate: float) -> str:
     """Return the channel-message body for a sale (HTML parse_mode)."""
     if sale.collection_title and sale.num is not None:
@@ -83,10 +96,17 @@ def _format_post(sale: WhaleSale, usd_rate: float) -> str:
     else:
         title = sale.title
 
+    link = sale.link
+    title_esc = _esc(title)
+    if link:
+        title_html = f'<a href="{_esc(link)}">{title_esc}</a>'
+    else:
+        title_html = title_esc
+
     lines: list[str] = []
     lines.append("🎉 GIFT SOLD!")
     lines.append("")
-    lines.append(f"🎁 <b>{_esc(title)}</b>")
+    lines.append(f"🎁 <b>{title_html}</b>")
     if sale.model:
         lines.append(f"├ Model: {_esc(sale.model)}")
     if sale.backdrop:
@@ -94,19 +114,15 @@ def _format_post(sale: WhaleSale, usd_rate: float) -> str:
     if sale.symbol:
         lines.append(f"├ Symbol: {_esc(sale.symbol)}")
 
+    price_str = _fmt_ton(sale.price_ton)
     if usd_rate > 0:
         usd = sale.price_ton * usd_rate
-        price_line = f"├ Price: {sale.price_ton:.2f} TON (~${usd:.2f})"
+        price_line = f"├ Price: {price_str} TON (~${usd:.2f})"
     else:
-        price_line = f"├ Price: {sale.price_ton:.2f} TON"
+        price_line = f"├ Price: {price_str} TON"
     lines.append(price_line)
 
-    link = sale.link
-    source = _esc(sale.source)
-    if link:
-        lines.append(f'└ Sold on <a href="{_esc(link)}">{source}</a>')
-    else:
-        lines.append(f"└ Sold on {source}")
+    lines.append(f"└ Sold on {_esc(sale.source)}")
 
     return "\n".join(lines)
 

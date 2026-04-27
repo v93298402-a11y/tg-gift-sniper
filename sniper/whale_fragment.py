@@ -45,6 +45,7 @@ import asyncio
 import logging
 import re
 from collections.abc import Awaitable, Callable
+from datetime import datetime, timedelta, timezone
 
 import httpx
 
@@ -57,6 +58,13 @@ SOLD_PATH = "/gifts?filter=sold&sort=listed&view=list"
 GIFT_THRESHOLD_TON = 100.0
 POLL_INTERVAL_SEC = 60.0
 HTTP_TIMEOUT_SEC = 20.0
+# Fragment's ?filter=sold&sort=listed page reshuffles old gifts to the top
+# whenever they see any *listing-side* activity (re-list, transfer between
+# wallets, etc.) — even years after the original sale. The row keeps its
+# original sale-price + sale-timestamp, so we filter by timestamp: any
+# "sale" whose timestamp is older than this is almost certainly a stale
+# row resurfacing due to a transfer, not a fresh sale.
+MAX_SALE_AGE = timedelta(hours=6)
 USER_AGENT = (
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/120.0 Safari/537.36"
@@ -87,6 +95,7 @@ _stats: dict[str, int] = {
     "whales_emitted": 0,
     "http_errors": 0,
     "parse_errors": 0,
+    "stale_filtered": 0,
 }
 
 
@@ -129,8 +138,21 @@ def _slug_from_href(href: str) -> str | None:
     return m.group(1) if m else None
 
 
+def _parse_iso_ts(ts: str) -> datetime | None:
+    """Parse an ISO-8601 timestamp from Fragment (e.g. ``2026-04-27T12:05:00+00:00``)."""
+    try:
+        return datetime.fromisoformat(ts)
+    except ValueError:
+        return None
+
+
 def _row_to_sale(row: re.Match[str]) -> WhaleSale | None:
-    """Build a WhaleSale from one parsed row, or None if unusable."""
+    """Build a WhaleSale from one parsed row, or None if unusable.
+
+    Returns ``None`` for rows whose sale-timestamp is older than
+    :data:`MAX_SALE_AGE` — those are almost certainly old sales
+    resurfacing on the page due to a transfer, not new whale sales.
+    """
     href = row.group("href")
     name = row.group("name").strip()
     attrs = row.group("attrs")
@@ -141,6 +163,21 @@ def _row_to_sale(row: re.Match[str]) -> WhaleSale | None:
     if price is None:
         _stats["parse_errors"] += 1
         return None
+
+    sale_dt = _parse_iso_ts(ts)
+    if sale_dt is not None:
+        now = datetime.now(timezone.utc)
+        age = now - sale_dt
+        if age > MAX_SALE_AGE:
+            _stats["stale_filtered"] += 1
+            logger.debug(
+                "Fragment row filtered as stale: %s sold %s (age=%s) — "
+                "likely resurfacing due to transfer, not a real sale",
+                name,
+                ts,
+                age,
+            )
+            return None
 
     fragment_slug = _slug_from_href(href)
     # Derive the canonical CamelCase slug from the gift name so links go to
