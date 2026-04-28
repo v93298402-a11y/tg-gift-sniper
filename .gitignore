@@ -8,8 +8,12 @@ build/
 *.egg
 
 .env
+config.yaml
 *.session
 *.session-journal
+targets.json
+menu_state.json
+bot_state.json
 
 .venv/
 venv/

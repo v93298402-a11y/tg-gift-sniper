@@ -13,12 +13,31 @@ from dotenv import load_dotenv
 
 logger = logging.getLogger(__name__)
 
+# Telegram Desktop (open-source) credentials — safe to use, no registration needed.
+# Can be overridden via .env if you have your own api_id/api_hash.
+DEFAULT_API_ID = 2040
+DEFAULT_API_HASH = "b18441a1ff607e10a989891a5462e627"
+
 
 @dataclass
 class TargetGift:
     gift_id: int
     max_price: int
     name: str
+    pay_with_ton: bool = False
+    model: str | None = None
+    pattern: str | None = None
+    backdrop: str | None = None
+
+
+@dataclass
+class MarketTarget:
+    gift_name: str
+    max_price: float
+    model: str | None = None
+    pattern: str | None = None
+    backdrop: str | None = None
+    markets: list[str] = field(default_factory=lambda: ["tonnel", "mrkt", "portals"])
 
 
 @dataclass
@@ -30,6 +49,7 @@ class Config:
     dry_run: bool
     max_spend_per_buy: int
     targets: list[TargetGift]
+    market_targets: list[MarketTarget]
     notify_chat_id: int | None
     log_level: str
     config_path: Path = field(repr=False)
@@ -41,8 +61,9 @@ class Config:
         api_id_raw = os.getenv("API_ID")
         api_hash = os.getenv("API_HASH")
         if not api_id_raw or not api_hash:
-            logger.error("API_ID and API_HASH must be set in .env")
-            sys.exit(1)
+            logger.info("API_ID/API_HASH not set in .env, using Telegram Desktop defaults")
+            api_id_raw = str(DEFAULT_API_ID)
+            api_hash = DEFAULT_API_HASH
 
         session_name = os.getenv("SESSION_NAME", "sniper")
 
@@ -61,12 +82,29 @@ class Config:
                     gift_id=int(entry["gift_id"]),
                     max_price=int(entry["max_price"]),
                     name=str(entry.get("name", f"gift-{entry['gift_id']}")),
+                    pay_with_ton=bool(entry.get("pay_with_ton", False)),
+                    model=entry.get("model"),
+                    pattern=entry.get("pattern"),
+                    backdrop=entry.get("backdrop"),
                 )
             )
 
         if not targets:
-            logger.error("No targets defined in config")
-            sys.exit(1)
+            logger.warning("No targets defined in config — add via bot or config.yaml")
+
+        market_targets: list[MarketTarget] = []
+        for entry in raw.get("market_targets", []):
+            mkts = entry.get("markets", ["tonnel", "mrkt", "portals"])
+            market_targets.append(
+                MarketTarget(
+                    gift_name=str(entry["gift_name"]),
+                    max_price=float(entry["max_price"]),
+                    model=entry.get("model"),
+                    pattern=entry.get("pattern"),
+                    backdrop=entry.get("backdrop"),
+                    markets=mkts,
+                )
+            )
 
         notify_raw = raw.get("notify_chat_id")
         notify_chat_id = int(notify_raw) if notify_raw else None
@@ -79,6 +117,7 @@ class Config:
             dry_run=bool(raw.get("dry_run", True)),
             max_spend_per_buy=int(raw.get("max_spend_per_buy", 5000)),
             targets=targets,
+            market_targets=market_targets,
             notify_chat_id=notify_chat_id,
             log_level=str(raw.get("log_level", "INFO")).upper(),
             config_path=config_path,
@@ -96,6 +135,10 @@ class Config:
                         gift_id=int(entry["gift_id"]),
                         max_price=int(entry["max_price"]),
                         name=str(entry.get("name", f"gift-{entry['gift_id']}")),
+                        pay_with_ton=bool(entry.get("pay_with_ton", False)),
+                        model=entry.get("model"),
+                        pattern=entry.get("pattern"),
+                        backdrop=entry.get("backdrop"),
                     )
                 )
             if new_targets:
